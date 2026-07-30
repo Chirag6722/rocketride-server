@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from unittest.mock import Mock, MagicMock
+from urllib.parse import urlsplit
 
 # Add nodes/src to path for imports
 NODES_SRC = Path(__file__).parent.parent / 'src' / 'nodes'
@@ -231,6 +232,7 @@ def get_python_lanes() -> List[Tuple[ServiceConfig, LaneDefinition]]:
 # below hold the `documentation` field to it.
 
 DOCS_SITE = 'https://docs.rocketride.org'
+DOCS_HOST = 'docs.rocketride.org'
 GENERATED_MARKER = '<!-- ROCKETRIDE:GENERATED:PARAMS START -->'
 
 
@@ -768,26 +770,39 @@ class TestDocumentationLinks:
             )
             return
 
-        assert isinstance(doc, str) and doc.startswith('https://'), (
+        assert isinstance(doc, str), f'{service.test_id}: documentation must be a string, got {doc!r}'
+        parts = urlsplit(doc)
+        host = (parts.hostname or '').lower()
+        assert parts.scheme == 'https' and host, (
             f'{service.test_id}: documentation must be an absolute https URL, got {doc!r}'
         )
 
-        if doc.rstrip('/') == DOCS_SITE:
-            # Bare docs root: only tolerated while the node has no page to link.
-            assert route is None, (
-                f'{service.test_id}: documentation points at the docs site root but the '
-                f'node has a dedicated page; use "{DOCS_SITE}{route}"'
+        if host == DOCS_HOST:
+            # Classify by hostname, not string prefix, so root URLs dressed up
+            # with a query or fragment cannot slip past as "external".
+            path = parts.path.rstrip('/')
+            if not path:
+                # Bare docs root: only tolerated while the node has no page to link.
+                assert route is None, (
+                    f'{service.test_id}: documentation points at the docs site root but the '
+                    f'node has a dedicated page; use "{DOCS_SITE}{route}"'
+                )
+            else:
+                assert route is not None, (
+                    f'{service.test_id}: documentation points at a docs site path but the node '
+                    f'has no staged docs page (README.md with generated markers); '
+                    f'author the doc or drop the field'
+                )
+                assert path == route, (
+                    f'{service.test_id}: documentation is {doc} but the staged docs route is {DOCS_SITE}{route}'
+                )
+        else:
+            # External vendor docs are a deliberate choice and allowed, but a
+            # lookalike or typo'd RocketRide domain is an authoring error.
+            assert 'rocketride' not in host, (
+                f'{service.test_id}: documentation host {host!r} looks like a mistyped '
+                f'RocketRide docs domain; the docs site is {DOCS_SITE}'
             )
-        elif doc.startswith(DOCS_SITE + '/'):
-            assert route is not None, (
-                f'{service.test_id}: documentation points at a docs site path but the node '
-                f'has no staged docs page (README.md with generated markers); '
-                f'author the doc or drop the field'
-            )
-            assert doc == DOCS_SITE + route, (
-                f'{service.test_id}: documentation is {doc} but the staged docs route is {DOCS_SITE}{route}'
-            )
-        # Any other https URL is a deliberate external reference (vendor docs); allowed.
 
 
 # Note: Functional tests (actual node input/output testing via pipelines)
