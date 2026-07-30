@@ -220,6 +220,68 @@ def get_python_lanes() -> List[Tuple[ServiceConfig, LaneDefinition]]:
 
 
 # ============================================================================
+# Documentation Link Discovery
+# ============================================================================
+# The docs site stages one page per node from its co-located README
+# (packages/docs/scripts/lib/gather.js): /nodes/<dir> when the top-level
+# README.md carries the generated markers, plus /nodes/<dir>/<variant> for
+# each variant subdirectory holding a README.md. The canvas opens each
+# service's `documentation` URL verbatim from services*.json, so these
+# helpers derive the route a service's page will be staged at and the tests
+# below hold the `documentation` field to it.
+
+DOCS_SITE = 'https://docs.rocketride.org'
+GENERATED_MARKER = '<!-- ROCKETRIDE:GENERATED:PARAMS START -->'
+
+
+def service_slug(file_path: Path) -> str:
+    """Slug of a services file: services.json -> '', services.parse.json -> 'parse'."""
+    stem = file_path.name
+    stem = re.sub(r'\.json$', '', stem)
+    return re.sub(r'^services\.?', '', stem)
+
+
+def variant_owner(variant: str, slugs: List[str]) -> Optional[str]:
+    """Owning service slug for a variant directory.
+
+    Mirrors variantDescription() in gather.js: exact match, then
+    endswith('_' + slug), then startswith(slug); within a tier the longest
+    slug wins, so overlapping slugs (parse/parser) resolve deterministically.
+    """
+    if variant in slugs:
+        return variant
+    for pred in (lambda s: variant.endswith('_' + s), lambda s: variant.startswith(s)):
+        best, best_len = None, -1
+        for slug in slugs:
+            if slug and pred(slug) and len(slug) > best_len:
+                best, best_len = slug, len(slug)
+        if best is not None:
+            return best
+    return None
+
+
+def expected_docs_route(service: ServiceConfig) -> Optional[str]:
+    """Docs-site route the service's page is staged at, or None when no page exists."""
+    node_dir = NODES_SRC / service.node_name
+    readme = node_dir / 'README.md'
+    if not readme.exists() or GENERATED_MARKER not in readme.read_text(encoding='utf-8'):
+        return None  # legacy or missing README: gather.js stages nothing for this node
+    slugs = [service_slug(p) for p in sorted(node_dir.glob('service*.json'))]
+    slug = service_slug(service.file_path)
+    if slug:
+        for variant_dir in sorted(node_dir.iterdir()):
+            if variant_dir.is_dir() and (variant_dir / 'README.md').exists():
+                if variant_owner(variant_dir.name, slugs) == slug:
+                    return f'/nodes/{service.node_name}/{variant_dir.name}'
+    return f'/nodes/{service.node_name}'
+
+
+def get_registerable_services() -> List[ServiceConfig]:
+    """Services that declare a protocol (palette-visible; excludes field fragments)."""
+    return [s for s in get_all_services() if s.protocol]
+
+
+# ============================================================================
 # Output Capture
 # ============================================================================
 
@@ -681,6 +743,51 @@ class TestNodeLanes:
         }
         for output in lane.outputs:
             assert output in valid_lanes, f"{service.test_id}:{lane.lane}: Unknown output lane '{output}'"
+
+
+class TestDocumentationLinks:
+    """Hold each service's `documentation` URL to the node's real docs page.
+
+    The canvas "Documentation" menu entry opens this URL verbatim, so a bare
+    site root is only acceptable while the node has no staged docs page at
+    all. Once a node gains a README with the generated markers, this test
+    starts requiring the deep link, keeping future nodes correct by
+    construction.
+    """
+
+    @pytest.mark.parametrize('service', get_registerable_services(), ids=lambda s: s.test_id)
+    def test_documentation_url(self, service: ServiceConfig):
+        """Verify the documentation URL matches the staged docs route."""
+        doc = service.raw_data.get('documentation')
+        route = expected_docs_route(service)
+
+        if doc is None:
+            assert route is None, (
+                f'{service.test_id}: has a docs page but no documentation URL; '
+                f'add "documentation": "{DOCS_SITE}{route}" to {service.file_path.name}'
+            )
+            return
+
+        assert isinstance(doc, str) and doc.startswith('https://'), (
+            f'{service.test_id}: documentation must be an absolute https URL, got {doc!r}'
+        )
+
+        if doc.rstrip('/') == DOCS_SITE:
+            # Bare docs root: only tolerated while the node has no page to link.
+            assert route is None, (
+                f'{service.test_id}: documentation points at the docs site root but the '
+                f'node has a dedicated page; use "{DOCS_SITE}{route}"'
+            )
+        elif doc.startswith(DOCS_SITE + '/'):
+            assert route is not None, (
+                f'{service.test_id}: documentation points at a docs site path but the node '
+                f'has no staged docs page (README.md with generated markers); '
+                f'author the doc or drop the field'
+            )
+            assert doc == DOCS_SITE + route, (
+                f'{service.test_id}: documentation is {doc} but the staged docs route is {DOCS_SITE}{route}'
+            )
+        # Any other https URL is a deliberate external reference (vendor docs); allowed.
 
 
 # Note: Functional tests (actual node input/output testing via pipelines)
