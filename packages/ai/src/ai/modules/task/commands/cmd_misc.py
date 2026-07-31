@@ -172,9 +172,6 @@ class MiscCommands(DAPConn):
         Best-effort and non-fatal: any error (unauthenticated, empty store, read
         failure) yields an empty overlay so the built-in catalog is never broken.
         """
-        if not getattr(self, '_account_info', None):
-            return {}
-
         from .capsule_airlock import load_relaxed_json
         from .cmd_install_node import STORE_NODES_ROOT
 
