@@ -151,8 +151,13 @@ class MiscCommands(DAPConn):
                 # Retrieve all available service definitions, then overlay capsules.
                 schema = getServiceDefinitions()
                 if isinstance(schema, dict) and overlay:
-                    # Built-ins win on key collision; capsules only ADD entries.
-                    schema = {**overlay, **schema}
+                    # getServiceDefinitions() is {'services': {provider: def}, 'version': n};
+                    # the client groups the flat 'services' map by classType. Merge the
+                    # installed capsules INTO that map (built-ins win on key collision).
+                    services = dict(schema.get('services') or {})
+                    for provider, definition in overlay.items():
+                        services.setdefault(provider, definition)
+                    schema = {**schema, 'services': services}
 
             # Return successful response with service definition(s)
             return self.build_response(request, body=schema)
