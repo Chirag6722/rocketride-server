@@ -2,7 +2,7 @@
 	"name": "rocketride",
 	"displayName": "RocketRide",
 	"description": "RocketRide extension for Visual Studio Code",
-	"version": "1.2.2",
+	"version": "1.2.3",
 	"publisher": "rocketride",
 	"repository": {
 		"type": "git",
@@ -32,6 +32,21 @@
 		"onStartupFinished"
 	],
 	"contributes": {
+		"languages": [
+			{
+				"id": "rocketride-capsule",
+				"aliases": [
+					"RocketRide Capsule"
+				],
+				"extensions": [
+					".rrc"
+				],
+				"icon": {
+					"light": "./rocketride-light-icon.png",
+					"dark": "./rocketride-dark-icon.png"
+				}
+			}
+		],
 		"customEditors": [
 			{
 				"viewType": "rocketride.PageProject",
