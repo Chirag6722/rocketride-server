@@ -358,6 +358,9 @@ class Task(DAPBase):
 
         # Lifecycle state
         self._tmpfile = None
+        # Per-run dir where installed node capsules are materialized for the
+        # task subprocess to scan via --node_path (removed on cleanup).
+        self._node_path_dir = None
         self._stop_requested = False
         # WHY the stop was requested ('user' | 'ttl'); None until requested.
         # A ttl-window expiry is SUCCESS (the run stayed up exactly as
@@ -573,6 +576,93 @@ class Task(DAPBase):
         if not self.client_id:
             return ''
         return validate_storage_root(f'users/{self.client_id}/files')
+
+    async def _materialize_installed_nodes(self, parent_node_path):
+        """
+        Materialize the caller's installed node capsules into a per-run directory
+        the task subprocess scans via --node_path.
+
+        Copies the parent engine's workspace nodes first (if any), then overlays
+        the caller's installed capsules from the store (capsules win on name
+        collision). Returns the dir to pass as --node_path, or None when the
+        caller has no installed capsules (caller then keeps the parent's path).
+        """
+        if not self.client_id:
+            return None
+        try:
+            from ai.account import RequestContext, Store
+
+            fs = Store.file_store(RequestContext.internal('capsule-materialize'), client_id=self.client_id)
+            listing = await fs.list_dir('local_nodes')
+        except Exception as e:
+            self.debug_message(f'no installed capsules to materialize: {e}')
+            return None
+
+        names = []
+        for entry in listing.get('entries', []) if isinstance(listing, dict) else []:
+            name = entry.get('name') if isinstance(entry, dict) else entry
+            if name and 'dirmarker' not in name:
+                names.append(name)
+        if not names:
+            return None
+
+        node_dir = tempfile.mkdtemp(prefix=f'capsule-nodes-{self.id}-')
+        self._node_path_dir = node_dir
+        dst_root = os.path.join(node_dir, 'local_nodes')
+        os.makedirs(dst_root, exist_ok=True)
+
+        # Parent workspace nodes first; installed capsules override by name.
+        if parent_node_path:
+            parent_local = os.path.join(parent_node_path, 'local_nodes')
+            if os.path.isdir(parent_local):
+                for name in os.listdir(parent_local):
+                    src = os.path.join(parent_local, name)
+                    if os.path.isdir(src):
+                        shutil.copytree(src, os.path.join(dst_root, name), dirs_exist_ok=True)
+
+        for name in names:
+            try:
+                await self._copy_store_tree(fs, f'local_nodes/{name}', os.path.join(dst_root, name))
+            except Exception as e:
+                self.debug_message(f'capsule materialize: skip {name!r} ({e})')
+
+        return node_dir
+
+    async def _copy_store_tree(self, fs, store_path, dst_dir):
+        """Recursively copy a store subtree to a local directory."""
+        os.makedirs(dst_dir, exist_ok=True)
+        listing = await fs.list_dir(store_path)
+        for entry in listing.get('entries', []) if isinstance(listing, dict) else []:
+            name = entry.get('name') if isinstance(entry, dict) else entry
+            if not name or 'dirmarker' in name:
+                continue
+            child_store = f'{store_path}/{name}'
+            child_dst = os.path.join(dst_dir, name)
+            try:
+                data = await self._read_store_bytes(fs, child_store)
+            except Exception:
+                # Not a readable file — treat as a subdirectory and recurse.
+                await self._copy_store_tree(fs, child_store, child_dst)
+                continue
+            with open(child_dst, 'wb') as fh:
+                fh.write(data)
+
+    async def _read_store_bytes(self, fs, path):
+        """Read a whole store file as bytes via the handle API."""
+        meta = await fs.open_read(path)
+        handle = meta['handle']
+        data = bytearray()
+        offset = 0
+        try:
+            while True:
+                chunk = await fs.read_chunk(handle, offset)
+                if not chunk:
+                    break
+                data.extend(chunk)
+                offset += len(chunk)
+        finally:
+            await fs.close_read(handle)
+        return bytes(data)
 
     async def _write_task_file(self, pipeline: Dict[str, Any]) -> str:
         """
@@ -858,6 +948,11 @@ class Task(DAPBase):
                 except OSError as e:
                     self.debug_message(f'Could not remove temporary file: {self._tmpfile} - {e}')
                 self._tmpfile = None
+
+            # Clean up the per-run materialized node capsules dir.
+            if self._node_path_dir:
+                shutil.rmtree(self._node_path_dir, ignore_errors=True)
+                self._node_path_dir = None
         except Exception as e:
             self.debug_message(f'Error cleaning up temporary file: {e}')
 
@@ -2065,13 +2160,23 @@ class Task(DAPBase):
                         child_args.append(arg)
                         break
 
-            # Inherit parent engine's --node_path so workspace-local nodes load
-            # in the task subprocess too (Opt reads argv only, not the env).
+            # Point the task subprocess at workspace-local AND user-installed
+            # nodes. The child scans <node_path>/local_nodes in C++ init (argv
+            # only, not env), and only one --node_path wins — so if the caller
+            # has installed capsules we materialize them (merged over the parent
+            # engine's workspace nodes) into a per-run dir and point there;
+            # otherwise we just inherit the parent engine's --node_path.
             if not any(a.startswith('--node_path=') for a in child_args):
+                parent_node_path = None
                 for arg in startup_args():
                     if arg.startswith('--node_path='):
-                        child_args.append(arg)
+                        parent_node_path = arg[len('--node_path=') :]
                         break
+                capsule_node_path = await self._materialize_installed_nodes(parent_node_path)
+                if capsule_node_path:
+                    child_args.append(f'--node_path={capsule_node_path}')
+                elif parent_node_path:
+                    child_args.append(f'--node_path={parent_node_path}')
 
             await self._send_status_update()
 

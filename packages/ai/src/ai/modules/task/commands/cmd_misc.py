@@ -44,6 +44,7 @@ Architecture:
 - Provides read-only access to service metadata
 """
 
+import json
 import os
 import time
 from typing import TYPE_CHECKING, Dict, Any, List, Tuple
@@ -131,16 +132,28 @@ class MiscCommands(DAPConn):
             args = request.get('arguments', {})
             service = args.get('service', None)
 
+            # Installed node capsules the caller owns, read live from the store so
+            # the palette reflects them WITHOUT an engine restart (m_services is
+            # init-only). Each is tagged source:"capsule" so the UI distinguishes it.
+            overlay = await self._installed_capsule_services()
+
             if service:
                 # Retrieve specific service definition by name
                 schema = getServiceDefinition(service)
+
+                # Fall back to an installed capsule before declaring not-found.
+                if not schema and service in overlay:
+                    schema = overlay[service]
 
                 # Validate the service exists
                 if not schema:
                     raise ValueError(f"Service '{service}' not found. Please check the service name and try again.")
             else:
-                # Retrieve all available service definitions
+                # Retrieve all available service definitions, then overlay capsules.
                 schema = getServiceDefinitions()
+                if isinstance(schema, dict) and overlay:
+                    # Built-ins win on key collision; capsules only ADD entries.
+                    schema = {**overlay, **schema}
 
             # Return successful response with service definition(s)
             return self.build_response(request, body=schema)
@@ -151,6 +164,59 @@ class MiscCommands(DAPConn):
 
             # Re-raise to let DAP error handling create proper error response
             raise
+
+    async def _installed_capsule_services(self) -> Dict[str, Any]:
+        """
+        Read the caller's installed node capsules from the store and return their
+        service definitions keyed by node name, each tagged ``source:"capsule"``.
+
+        Best-effort and non-fatal: any error (unauthenticated, empty store, read
+        failure) yields an empty overlay so the built-in catalog is never broken.
+        """
+        if not getattr(self, '_account_info', None):
+            return {}
+
+        from .cmd_install_node import STORE_NODES_ROOT
+
+        try:
+            from ai.account import Store
+
+            fs = Store.file_store(self.request_context())
+            listing = await fs.list_dir(STORE_NODES_ROOT)
+        except Exception as e:
+            self.debug_message(f'capsule overlay: no installed nodes ({e})')
+            return {}
+
+        overlay: Dict[str, Any] = {}
+        for entry in listing.get('entries', []) if isinstance(listing, dict) else []:
+            name = entry.get('name') if isinstance(entry, dict) else entry
+            if not name:
+                continue
+            try:
+                text = await self._read_store_text(fs, f'{STORE_NODES_ROOT}/{name}/services.json')
+                definition = json.loads(text)
+                definition['source'] = 'capsule'
+                overlay[name] = definition
+            except Exception as e:
+                self.debug_message(f'capsule overlay: skip {name!r} ({e})')
+        return overlay
+
+    async def _read_store_text(self, fs, path: str) -> str:
+        """Read a whole store file as UTF-8 text via the handle API."""
+        meta = await fs.open_read(path)
+        handle = meta['handle']
+        data = bytearray()
+        offset = 0
+        try:
+            while True:
+                chunk = await fs.read_chunk(handle, offset)
+                if not chunk:
+                    break
+                data.extend(chunk)
+                offset += len(chunk)
+        finally:
+            await fs.close_read(handle)
+        return bytes(data).decode('utf-8')
 
     async def on_rrext_validate(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """
