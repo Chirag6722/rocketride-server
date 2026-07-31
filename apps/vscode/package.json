@@ -508,6 +508,11 @@
 					"command": "rocketride.sidebar.files.createFile",
 					"when": "view == rocketride.provider.files",
 					"group": "navigation@2"
+				},
+				{
+					"command": "rocketride.node.installCapsule",
+					"when": "view == rocketride.provider.files",
+					"group": "navigation@3"
 				}
 			],
 			"view/item/context": [
