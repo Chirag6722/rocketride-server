@@ -180,12 +180,25 @@ class MiscCommands(DAPConn):
         from .capsule_airlock import load_relaxed_json
         from .cmd_install_node import STORE_NODES_ROOT
 
+        def _clog(msg):
+            try:
+                with open('/tmp/capsule-overlay.log', 'a') as fh:
+                    fh.write(msg + '\n')
+            except Exception:
+                pass
+
         try:
             from ai.account import Store
 
-            fs = Store.file_store(self.request_context())
+            ctx = self.request_context()
+            _clog(
+                f'overlay: ctx account_info={getattr(ctx, "account_info", "?")!r} client_id={getattr(ctx, "client_id", "?")!r}'
+            )
+            fs = Store.file_store(ctx)
             listing = await fs.list_dir(STORE_NODES_ROOT)
+            _clog(f'overlay: list_dir({STORE_NODES_ROOT}) -> {listing}')
         except Exception as e:
+            _clog(f'overlay: store access FAILED: {type(e).__name__}: {e}')
             self.debug_message(f'capsule overlay: no installed nodes ({e})')
             return {}
 
@@ -199,8 +212,11 @@ class MiscCommands(DAPConn):
                 definition = load_relaxed_json(text)
                 definition['source'] = 'capsule'
                 overlay[name] = definition
+                _clog(f'overlay: added {name!r} classType={definition.get("classType")}')
             except Exception as e:
+                _clog(f'overlay: skip {name!r}: {type(e).__name__}: {e}')
                 self.debug_message(f'capsule overlay: skip {name!r} ({e})')
+        _clog(f'overlay: returning {list(overlay.keys())}')
         return overlay
 
     async def _read_store_text(self, fs, path: str) -> str:
