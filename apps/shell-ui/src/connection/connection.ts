@@ -491,8 +491,11 @@ export class ConnectionManager implements IConnectionManager {
 		if (code) {
 			const verifier = getStoredVerifier();
 			clearStoredVerifier();
-			// Strip the ?code= from the URL so refreshes don't re-exchange
-			window.history.replaceState({}, '', window.location.pathname);
+			// Strip the ?code= from the URL so refreshes don't re-exchange.
+			// Carry the existing `history.state` across — it is shared with the
+			// home-ui remote (which keeps its snapshot under `rrHome`), so it must
+			// be merged, never replaced; only the query string is being dropped.
+			window.history.replaceState({ ...(window.history.state ?? {}) }, '', window.location.pathname);
 
 			if (!verifier) {
 				// Missing verifier — can't exchange this code. This is the
