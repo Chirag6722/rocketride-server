@@ -44,7 +44,6 @@ Architecture:
 - Provides read-only access to service metadata
 """
 
-import json
 import os
 import time
 from typing import TYPE_CHECKING, Dict, Any, List, Tuple
@@ -176,6 +175,7 @@ class MiscCommands(DAPConn):
         if not getattr(self, '_account_info', None):
             return {}
 
+        from .capsule_airlock import load_relaxed_json
         from .cmd_install_node import STORE_NODES_ROOT
 
         try:
@@ -194,7 +194,7 @@ class MiscCommands(DAPConn):
                 continue
             try:
                 text = await self._read_store_text(fs, f'{STORE_NODES_ROOT}/{name}/services.json')
-                definition = json.loads(text)
+                definition = load_relaxed_json(text)
                 definition['source'] = 'capsule'
                 overlay[name] = definition
             except Exception as e:

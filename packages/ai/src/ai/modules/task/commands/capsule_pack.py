@@ -40,7 +40,7 @@ import os
 import zipfile
 from typing import List, Optional
 
-from .capsule_airlock import MANIFEST_NAME, NODES_ROOT, _payload_sha256
+from .capsule_airlock import MANIFEST_NAME, NODES_ROOT, _payload_sha256, load_relaxed_json
 
 # Files that never belong in a capsule (build/runtime cruft).
 _SKIP_DIRS = frozenset({'__pycache__', '.git', '.mypy_cache', '.ruff_cache'})
@@ -65,7 +65,7 @@ def pack_node_dir(node_src_dir: str, version: str = '0.0.0', declares: Optional[
     if not os.path.isfile(services_path):
         raise ValueError(f'no services.json under {node_src_dir}')
     with open(services_path, 'r', encoding='utf-8') as fh:
-        services = json.load(fh)
+        services = load_relaxed_json(fh.read())
     protocol = services.get('protocol') or f'{name}://'
 
     # Collect payload arcname -> bytes under local_nodes/<name>/.

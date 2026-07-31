@@ -44,6 +44,7 @@ import ast
 import hashlib
 import json
 import posixpath
+import re
 import zipfile
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -182,7 +183,7 @@ def validate_capsule(zip_bytes: bytes) -> CapsuleInfo:
     if violations:
         raise AirlockRejected(violations)
 
-    services_json = json.loads(zf.read(services_path).decode('utf-8'))
+    services_json = load_relaxed_json(zf.read(services_path).decode('utf-8'))
     protocol = services_json.get('protocol') or f'{name}://'
     return CapsuleInfo(
         name=name,
@@ -226,6 +227,53 @@ def _scan_python(tree: ast.AST, arc: str, declared_caps: set) -> List[str]:
                 if 'subprocess' not in declared_caps:
                     out.append(f'{arc}:{node.lineno}: {fn.attr}() requires declared "subprocess"')
     return out
+
+
+def load_relaxed_json(text: str):
+    """
+    Parse RocketRide's relaxed JSON. Node ``services.json`` files carry ``//`` and
+    ``/* */`` comments and trailing commas (the C++ engine tolerates them); strict
+    ``json`` does not, so strip those first — without touching string contents.
+    """
+    return json.loads(_strip_relaxed_json(text))
+
+
+def _strip_relaxed_json(text: str) -> str:
+    out = []
+    i, n = 0, len(text)
+    in_str = False
+    quote = ''
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == '\\' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                in_str = False
+            i += 1
+            continue
+        if c in ('"', "'"):
+            in_str = True
+            quote = c
+            out.append(c)
+        elif c == '/' and i + 1 < n and text[i + 1] == '/':
+            while i < n and text[i] != '\n':
+                i += 1
+            continue
+        elif c == '/' and i + 1 < n and text[i + 1] == '*':
+            i += 2
+            while i + 1 < n and not (text[i] == '*' and text[i + 1] == '/'):
+                i += 1
+            i += 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    # Drop trailing commas before a closing } or ].
+    return re.sub(r',(\s*[}\]])', r'\1', ''.join(out))
 
 
 def _payload_sha256(files: Dict[str, bytes]) -> str:
