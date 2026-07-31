@@ -29,7 +29,7 @@ import { RocketRideClient } from 'rocketride';
 
 const client = new RocketRideClient({
 	auth: process.env.ROCKETRIDE_APIKEY!,
-	uri: 'https://api.rocketride.ai', // RocketRide Cloud, or ws://localhost:5565 for a local engine
+	uri: 'ws://localhost:5565', // your engine (or RocketRide Cloud: https://api.rocketride.ai)
 });
 await client.connect();
 const { token } = await client.use({ filepath: './pipeline.pipe' });
@@ -39,7 +39,23 @@ await client.terminate(token);
 await client.disconnect();
 ```
 
-Don't have a pipeline yet? Visit [RocketRide on GitHub](https://github.com/rocketride-org/rocketride-server) or download the extension directly in your IDE.
+Where the key comes from: when the VS Code extension connects to a self-hosted engine, it writes `ROCKETRIDE_URI` and `ROCKETRIDE_APIKEY` into your workspace `.env` automatically. For RocketRide Cloud, create a key at [cloud.rocketride.ai](https://cloud.rocketride.ai/).
+
+Don't have a pipeline yet? Save this minimal `pipeline.pipe` next to your script (`project_id` is any identifier you choose; it groups the pipeline's runs and logs):
+
+```json
+{
+  "components": [
+    { "id": "webhook_1", "provider": "webhook", "config": { "hideForm": true, "mode": "Source", "parameters": {}, "type": "webhook" } },
+    { "id": "response_text_1", "provider": "response_text", "config": { "laneName": "text" }, "input": [{ "lane": "text", "from": "webhook_1" }] }
+  ],
+  "project_id": "quickstart",
+  "viewport": { "x": 0, "y": 0, "zoom": 1 },
+  "version": 1
+}
+```
+
+Then build real pipelines visually: visit [RocketRide on GitHub](https://github.com/rocketride-org/rocketride-server) or download the extension directly in your IDE.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/install.png" alt="Install RocketRide extension" width="600">
@@ -51,15 +67,15 @@ Don't have a pipeline yet? Visit [RocketRide on GitHub](https://github.com/rocke
 It lets you build, debug, and deploy production AI workflows without leaving your IDE,
 using a visual drag-and-drop canvas or code-first with TypeScript and Python SDKs.
 
-- **85+ pipeline nodes** - 13 LLM providers, 8 vector databases, OCR, NER, PII anonymization, agents, and more
+- **115+ pipeline nodes** - 16 LLM providers, 9 vector databases, OCR, NER, PII anonymization, agents, and more
 - **High-performance C++ engine** - multithreaded runtime built for AI and data workloads
 - **Full TypeScript support** - complete type definitions, works in Node.js and the browser
 - **MIT licensed** - fully open source, OSI-compliant
 
 The same portable `.pipe` file runs against either deployment:
 
-- **[RocketRide Cloud](https://cloud.rocketride.ai/)** (now live): managed hosting, no infrastructure to run. Point the client at `https://api.rocketride.ai` with your API key.
 - **Self-hosted** (free, MIT): Docker, on-prem, or a local process in your IDE. Point the client at your own engine, e.g. `ws://localhost:5565`.
+- **[RocketRide Cloud](https://cloud.rocketride.ai/)**: managed hosting at `https://api.rocketride.ai`, if you would rather not run an engine yourself.
 
 <img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/canvas.png" alt="RocketRide visual canvas builder" width="800">
 
@@ -88,7 +104,7 @@ Configuration object passed to `new RocketRideClient(config)`.
 | Property            | Type                                                     | Required | Description                                                                                                                                                                                                                                              |
 | ------------------- | -------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `auth`              | `string`                                                 | No       | API key or token. Optional: omit and set via `env.ROCKETRIDE_APIKEY` or `.env` (Node only), or pass a credential directly to `connect()` / `login()`.                                                                                                    |
-| `uri`               | `string`                                                 | No       | Server URI (e.g. `https://api.rocketride.ai` or `ws://localhost:5565`). Optional: omit and use `env.ROCKETRIDE_URI` or the built-in default, or pass per call via `connect(credential, { uri })` / `attach(uri)`.                                        |
+| `uri`               | `string`                                                 | No       | Server URI (e.g. `ws://localhost:5565` or `https://api.rocketride.ai`). `http(s)://` and `ws(s)://` schemes are both accepted and normalized automatically. Optional: omit and use `env.ROCKETRIDE_URI` or the built-in default, or pass per call via `connect(credential, { uri })` / `attach(uri)`.                                        |
 | `env`               | `Record<string, string>`                                 | No       | Override env; if omitted, `.env` is loaded in Node (only), falling back to `process.env`. `ROCKETRIDE_*` values are forwarded with `use()`; the server resolves `${ROCKETRIDE_*}` in pipeline config from its merged environment.                         |
 | `persist`           | `boolean`                                                | No       | Enable automatic reconnection. Default: `false`. **Use `true`** for long-lived UIs or when the server may restart; the client retries with linear backoff (250ms increments, 15s cap) until connected or `detach()`, calling `onConnectError` on each failure. Auth failures stop the retry loop. |
 | `maxRetryTime`      | `number`                                                 | No       | Accepted for backward compatibility but ignored: reconnection no longer gives up on its own. Call `detach()` or `disconnect()` to stop retrying.                                                                                                         |
@@ -109,7 +125,7 @@ Configuration object passed to `new RocketRideClient(config)`.
 ```typescript
 const client = new RocketRideClient({
 	auth: process.env.ROCKETRIDE_APIKEY!,
-	uri: 'wss://api.rocketride.ai',
+	uri: 'ws://localhost:5565',
 	persist: true,
 	requestTimeout: 30000,
 	onConnected: async () => setStatus('connected'),
@@ -132,7 +148,7 @@ Creates a client instance; it does **not** connect until you call `connect()` (o
 **Example:**
 
 ```typescript
-const client = new RocketRideClient({ auth: 'my-key', uri: 'https://api.rocketride.ai' });
+const client = new RocketRideClient({ auth: 'my-key', uri: 'ws://localhost:5565' });
 await client.connect();
 ```
 
@@ -155,6 +171,8 @@ The connection API is layered: `attach()` opens the WebSocket without authentica
 **How to use:** For one-off scripts, call `connect()` once, do your work, then `disconnect()`. For UIs, use `persist: true` and rely on the client to reconnect; only call `disconnect()` when the user logs out or you are done with the client. The client supports `await using` (Symbol.asyncDispose) for automatic disconnect when exiting scope.
 
 ### Low-level DAP
+
+RocketRide clients talk to the engine over DAP (Debug Adapter Protocol) messages on a WebSocket. The methods below let you send commands the higher-level API does not wrap.
 
 | Method         | Signature                                                                                                                                   | Returns               | Description                                                                                                                                                                                 |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -202,8 +220,8 @@ await client.terminate(token);
 
 | Method      | Signature                                                                                                                                                  | Returns                                 | Description                                                                                                                                                                                                         |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipe`      | `pipe(token: string, objinfo?: Record<string, unknown>, mimeType?: string, provider?: string, onSSE?): Promise<DataPipe>`                                  | `Promise<DataPipe>`                     | Creates a **streaming** data pipe. Use when you have large payloads or chunks arriving over time; you call `open()`, then one or more `write()`, then `close()`. Default MIME: `application/octet-stream`.          |
-| `send`      | `send(token: string, data: string \| Uint8Array, objinfo?: Record<string, unknown>, mimetype?: string, onSSE?): Promise<PIPELINE_RESULT \| undefined>`     | `Promise<PIPELINE_RESULT \| undefined>` | Sends data in **one shot** (internally: open pipe, write once, close). Use for small payloads when you have the full buffer in memory.                                                                              |
+| `pipe`      | `pipe(token: string, objinfo?: Record<string, unknown>, mimeType?: string, provider?: string, onSSE?: (type: string, data: Record<string, unknown>) => Promise<void>): Promise<DataPipe>`                                  | `Promise<DataPipe>`                     | Creates a **streaming** data pipe. Use when you have large payloads or chunks arriving over time; you call `open()`, then one or more `write()`, then `close()`. Default MIME: `application/octet-stream`.          |
+| `send`      | `send(token: string, data: string \| Uint8Array, objinfo?: Record<string, unknown>, mimetype?: string, onSSE?: (type: string, data: Record<string, unknown>) => Promise<void>): Promise<PIPELINE_RESULT \| undefined>`     | `Promise<PIPELINE_RESULT \| undefined>` | Sends data in **one shot** (internally: open pipe, write once, close). Use for small payloads when you have the full buffer in memory.                                                                              |
 | `sendFiles` | `sendFiles(files: Array<{ file: File; objinfo?: Record<string, unknown>; mimetype?: string }>, token: string): Promise<UPLOAD_RESULT[]>`                   | `Promise<UPLOAD_RESULT[]>`              | Uploads multiple browser `File` objects. Results are in the same order as `files`. Progress is reported via `onEvent` as `apaevt_status_upload` events (e.g. `body.filepath`, `body.bytes_sent`, `body.file_size`). |
 
 The optional `onSSE` callback (`(type: string, data: Record<string, unknown>) => Promise<void>`) receives incremental server-sent output, e.g. token-by-token LLM text, while the request is in flight.
@@ -244,13 +262,25 @@ const result = await pipe.close();
 
 ### Server filesystem
 
-Server-side project storage, replacing the removed project store methods: `fsOpen()`, `fsRead()`, `fsWrite()`, `fsClose()`, `fsDelete()`, `fsListDir()`, `fsMkdir()`, `fsRmdir()`, `fsStat()`, `fsRename()`, `fsGetUrl()`, plus the string/JSON conveniences `fsReadString()`, `fsWriteString()`, `fsReadJson()`, `fsWriteJson()`. See the [full reference](https://docs.rocketride.org/) for signatures.
+Server-side project storage, replacing the removed project store methods.
+
+| Method      | Signature                                                                                                                                    | Description                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `fsOpen`    | `fsOpen(path: string, mode: 'r' \| 'w' = 'r'): Promise<{ handle: string; size?: number }>`                                                   | Opens a server file and returns a handle for `fsRead`/`fsWrite`.   |
+| `fsRead`    | `fsRead(handle: string, offset?: number, length?: number): Promise<Uint8Array>`                                                              | Reads a chunk (default up to 4 MiB) from an open handle.           |
+| `fsWrite`   | `fsWrite(handle: string, data: Uint8Array): Promise<number>`                                                                                 | Appends a chunk to a handle opened with mode `'w'`.                |
+| `fsClose`   | `fsClose(handle: string, mode: 'r' \| 'w'): Promise<void>`                                                                                   | Closes the handle; `mode` must match the one used in `fsOpen`.     |
+| `fsListDir` | `fsListDir(path?: string): Promise<{ entries: Array<{ name: string; type: 'file' \| 'dir'; size?: number; modified?: number }>; count: number }>` | Lists a server directory.                                     |
+| `fsStat`    | `fsStat(path: string): Promise<{ exists: boolean; type?: 'file' \| 'dir'; size?: number; modified?: number }>`                               | Checks existence and metadata without opening the file.            |
+| `fsDelete`  | `fsDelete(path: string): Promise<void>`                                                                                                      | Deletes a server file.                                             |
+
+Also available: `fsMkdir()`, `fsRmdir()`, `fsRename()`, `fsGetUrl()`, and the string/JSON conveniences `fsReadString()`, `fsWriteString()`, `fsReadJson()`, `fsWriteJson()` (each wraps open/read-or-write/close for you). See the [full reference](https://docs.rocketride.org/) for those signatures.
 
 ### Chat
 
 | Method | Signature                                                                                  | Returns                    | Description                                                                                                                                                                       |
 | ------ | ------------------------------------------------------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `chat` | `chat(options: { token: string; question: Question; onSSE? }): Promise<PIPELINE_RESULT>`   | `Promise<PIPELINE_RESULT>` | Sends the `Question` to the AI for the given pipeline token and returns the pipeline result. Pass `onSSE` to receive the answer incrementally as it is generated.                  |
+| `chat` | `chat(options: { token: string; question: Question; onSSE?: (type: string, data: Record<string, unknown>) => Promise<void> }): Promise<PIPELINE_RESULT>`   | `Promise<PIPELINE_RESULT>` | Sends the `Question` to the AI for the given pipeline token and returns the pipeline result. Pass `onSSE` to receive the answer incrementally as it is generated.                  |
 
 **How it works:** The client opens a pipe with MIME type `application/rocketride-question`, writes the serialized `Question`, closes the pipe, and returns the server's result. Works with chat, webhook, and dropper sources.
 
@@ -355,7 +385,7 @@ import { RocketRideClient } from 'rocketride';
 
 const client = new RocketRideClient({
 	auth: process.env.ROCKETRIDE_APIKEY!,
-	uri: 'https://api.rocketride.ai',
+	uri: 'ws://localhost:5565',
 });
 await client.connect();
 const { token } = await client.use({ filepath: './pipeline.pipe' });
@@ -370,7 +400,7 @@ await client.disconnect();
 ```typescript
 import { RocketRideClient } from 'rocketride';
 
-const status = await RocketRideClient.withConnection({ auth: 'my-key', uri: 'wss://api.rocketride.ai' }, async (client) => {
+const status = await RocketRideClient.withConnection({ auth: 'my-key', uri: 'ws://localhost:5565' }, async (client) => {
 	const { token } = await client.use({ pipeline: myPipelineConfig });
 	await client.send(token, JSON.stringify({ data: 1 }));
 	return await client.getTaskStatus(token);
@@ -468,8 +498,9 @@ const response = await client.chat({
 	onSSE: async (type, data) => process.stdout.write(String(data.text ?? '')),
 });
 const answerText = response?.data?.answer ?? response?.answers?.[0] ?? '';
-const structured = JSON.parse(answerText);
-console.log(structured);
+if (answerText) {
+	console.log(JSON.parse(String(answerText)));
+}
 
 await client.terminate(token);
 await client.disconnect();
@@ -498,10 +529,10 @@ await client.disconnect();
 ## Links
 
 - [Documentation](https://docs.rocketride.org/)
-- [RocketRide Cloud](https://cloud.rocketride.ai/)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
 - [Discord](https://discord.gg/PMXrtenMsY)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
+- [RocketRide Cloud](https://cloud.rocketride.ai/)
 
 ## License
 

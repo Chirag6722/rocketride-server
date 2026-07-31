@@ -35,9 +35,9 @@
 
 [RocketRide](https://rocketride.org) is an open source, developer-native AI pipeline platform. It lets you build, debug, and deploy production AI workflows without leaving your IDE, using a visual drag-and-drop canvas or code-first with the TypeScript and Python SDKs. Pipelines are portable JSON (`.pipe` files) executed by a multithreaded C++ engine.
 
-- **85+ pipeline nodes**: 13 LLM providers, 8 vector databases, OCR, NER, PII anonymization, chunking, embeddings, and more
+- **115+ pipeline nodes**: 16 LLM providers, 9 vector databases, OCR, NER, PII anonymization, chunking, embeddings, and more
 - **High-performance C++ engine**: native multithreading built for production AI and data workloads
-- **Two ways to run**: [RocketRide Cloud](https://cloud.rocketride.ai/) (managed hosting, now live) or self-hosted on Docker, on-prem, or local hardware
+- **Two ways to run**: self-hosted on Docker, on-prem, or local hardware; or [RocketRide Cloud](https://cloud.rocketride.ai/) managed hosting
 - **MIT licensed**: the self-hosted engine is free, fully open source, and OSI-compliant
 
 ## Features
@@ -129,12 +129,12 @@ Additional commands are available via the sidebar and context menus:
 ## Links
 
 - [Documentation](https://docs.rocketride.org/)
-- [RocketRide Cloud](https://cloud.rocketride.ai/)
 - [Home](https://rocketride.org)
 - [Discord](https://discord.gg/PMXrtenMsY)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
 - [Security](https://github.com/rocketride-org/rocketride-server/blob/develop/SECURITY.md)
+- [RocketRide Cloud](https://cloud.rocketride.ai/)
 
 ## License
 

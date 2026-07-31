@@ -25,7 +25,8 @@ from rocketride import RocketRideClient
 
 
 async def main():
-    async with RocketRideClient(uri='https://api.rocketride.ai', auth='my-key') as client:
+    # your engine (or RocketRide Cloud: uri='https://api.rocketride.ai')
+    async with RocketRideClient(uri='ws://localhost:5565', auth='my-key') as client:
         result = await client.use(filepath='pipeline.pipe')
         token = result['token']
         out = await client.send(token, 'Hello, pipeline!', objinfo={'name': 'input.txt'}, mimetype='text/plain')
@@ -36,10 +37,12 @@ async def main():
 asyncio.run(main())
 ```
 
+Where the key comes from: when the VS Code extension connects to a self-hosted engine, it writes `ROCKETRIDE_URI` and `ROCKETRIDE_APIKEY` into your workspace `.env` automatically. For RocketRide Cloud, create a key at [cloud.rocketride.ai](https://cloud.rocketride.ai/).
+
 **Important:** `client.send()` / `client.send_files()` are intended for pipelines whose **source** is `webhook` or `dropper`.  
 If your pipeline source is `chat`, use `client.chat()` instead.
 
-If you need a minimal `.pipe` to test `send()` end-to-end, start with:
+If you need a minimal `.pipe` to test `send()` end-to-end, start with (`project_id` is any identifier you choose; it groups the pipeline's runs and logs):
 
 ```json
 {
@@ -47,7 +50,7 @@ If you need a minimal `.pipe` to test `send()` end-to-end, start with:
     { "id": "webhook_1", "provider": "webhook", "config": { "hideForm": true, "mode": "Source", "parameters": {}, "type": "webhook" } },
     { "id": "response_text_1", "provider": "response_text", "config": { "laneName": "text" }, "input": [{ "lane": "text", "from": "webhook_1" }] }
   ],
-  "project_id": "<your-project-id>",
+  "project_id": "quickstart",
   "viewport": { "x": 0, "y": 0, "zoom": 1 },
   "version": 1
 }
@@ -64,14 +67,14 @@ Don't have a pipeline yet? Visit [RocketRide on GitHub](https://github.com/rocke
 [RocketRide](https://rocketride.org) is an open source, developer-native AI pipeline platform.
 It lets you build, debug, and deploy production AI workflows without leaving your IDE, using a visual drag-and-drop canvas or code-first with the Python and TypeScript SDKs. This package is the Python SDK: it connects your application to a RocketRide engine and runs your `.pipe` pipelines.
 
-- **85+ pipeline nodes**: 13 LLM providers, 8 vector databases, OCR, NER, PII anonymization, and more
+- **115+ pipeline nodes**: 16 LLM providers, 9 vector databases, OCR, NER, PII anonymization, and more
 - **High-performance C++ engine**: native multithreading built for AI and data workloads
 - **MIT licensed**: fully open source, OSI-compliant
 
 There are two ways to run the engine your client connects to:
 
-- **[RocketRide Cloud](https://cloud.rocketride.ai/)** (now live): managed hosting. Point the client at `https://api.rocketride.ai` with your API token and build; no infrastructure to run.
-- **Self-hosted**: free and MIT licensed. Run the same engine locally, in Docker, or on-premises, and point the client at it (for example `ws://localhost:5565`).
+- **Self-hosted**: free and MIT licensed. Run the engine locally, in Docker, or on-premises, and point the client at it (for example `ws://localhost:5565`).
+- **[RocketRide Cloud](https://cloud.rocketride.ai/)**: managed hosting at `https://api.rocketride.ai`, if you would rather not run an engine yourself.
 
 The same `.pipe` file runs unchanged on both.
 
@@ -118,7 +121,7 @@ RocketRideClient(
 
 | Argument              | Type                      | Required | Description                                                                                                                                          |
 | --------------------- | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `uri`                 | `str`                     | Yes\*    | Server URI. \*Can be empty if `ROCKETRIDE_URI` is set in env/`.env`.                                                                                 |
+| `uri`                 | `str`                     | Yes\*    | Server URI. `http(s)://` and `ws(s)://` schemes are both accepted and normalized automatically. \*Can be empty if `ROCKETRIDE_URI` is set in env/`.env`.     |
 | `auth`                | `str`                     | Yes\*    | API key. \*Can be empty if `ROCKETRIDE_APIKEY` is set.                                                                                               |
 | `env`                 | `dict`                    | No       | Override env; if omitted, `.env` is loaded. Use when passing config in code instead of env files.                                                    |
 | `module`              | `str`                     | No       | Client name for logging.                                                                                                                             |
@@ -138,7 +141,7 @@ Raises `ValueError` if both `uri` and `ROCKETRIDE_URI` are empty or if `auth` is
 
 ```python
 client = RocketRideClient(
-    uri='https://api.rocketride.ai',
+    uri='ws://localhost:5565',
     auth='my-key',
     persist=True,
     on_connect_error=lambda msg: print('Connect error:', msg),
@@ -158,7 +161,7 @@ client = RocketRideClient(
 **Example:**
 
 ```python
-async with RocketRideClient(uri='wss://api.rocketride.ai', auth=os.environ['ROCKETRIDE_APIKEY']) as client:
+async with RocketRideClient(uri='ws://localhost:5565', auth=os.environ['ROCKETRIDE_APIKEY']) as client:
     result = await client.use(filepath='pipeline.pipe')
     token = result['token']
     await client.send(token, 'Hello, pipeline!')
@@ -181,6 +184,8 @@ async with RocketRideClient(uri='wss://api.rocketride.ai', auth=os.environ['ROCK
 | `get_apikey`          | `def get_apikey(self) -> Optional[str]`                                                               | `str \| None`   | The API key in use. For debugging only; avoid logging in production.                                                                                                                                                                                                                                                            |
 
 ### Low-level DAP
+
+RocketRide clients talk to the engine over DAP (Debug Adapter Protocol) messages on a WebSocket. The methods below let you send commands the higher-level API does not wrap.
 
 | Method          | Signature                                                                                                                | Returns | Description                                                                                                                                       |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -251,7 +256,7 @@ result = await pipe.close()
 
 | Method         | Signature                                                                           | Returns        | Description                                                                                                                                                   |
 | -------------- | ----------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `get_services` | `async def get_services(self) -> dict`                                              | `dict`         | Returns all service definitions. Use to discover what the server supports.                                                                                    |
+| `get_services` | `async def get_services(self) -> dict`                                              | `dict`         | Returns `{'services': {...}, 'version': ...}`; the definitions are under the `services` key. Use to discover what the server supports.                        |
 | `get_service`  | `async def get_service(self, service: str) -> Optional[dict]`                       | `dict \| None` | Returns one service by name; `None` if not found or on error.                                                                                                 |
 | `validate`     | `async def validate(self, pipeline: PipelineConfig, *, source: str = None) -> dict` | `dict`         | Validates a pipeline configuration without starting it. Returns validation results (e.g. errors, warnings). Use to check pipeline correctness before `use()`. |
 | `ping`         | `async def ping(self, token: str = None) -> None`                                   | -              | Liveness check; raises on failure.                                                                                                                            |
@@ -262,7 +267,7 @@ result = await pipe.close()
 | ------ | ---------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `chat` | `async def chat(self, *, token: str, question: Question, on_sse=None) -> PIPELINE_RESULT` | `PIPELINE_RESULT` | Sends the `Question` to the AI for the given token and returns the pipeline result. Pass `on_sse` to receive the answer incrementally as it is generated. The answer is in the result body; use the schema's answer helpers if you need to parse JSON from the AI text. |
 
-**How it works:** The client opens a pipe with the question MIME type, writes the serialized `Question`, closes the pipe, and returns the server result. The pipeline must support the chat provider.
+**How it works:** The client opens a pipe with the question MIME type, writes the serialized `Question`, closes the pipe, and returns the server result. Works with chat, webhook, and dropper sources.
 
 ### Run logs (`client.log`)
 
@@ -270,10 +275,10 @@ Every task writes one continuous JSONL event log per `projectId.source.runKind`,
 
 | Method              | Signature                                                                                              | Returns          | Description                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------- |
-| `chapters`          | `async def chapters(self, project_id: str, source: str, run_kind: str) -> dict`                        | `dict`           | The stream's runs (chapters): begin/end/outcome per run.                                                |
-| `read`              | `async def read(self, project_id: str, source: str, run_kind: str, ...) -> dict`                       | `dict`           | Ranged, paged event read over the continuum; filter by `from_seq`, `types`, and more.                   |
-| `segment`           | `async def segment(self, ...) -> ...`                                                                  | raw segment      | Fetches a raw log segment.                                                                              |
-| `delete`            | `async def delete(self, ...) -> None`                                                                  | -                | Deletes a run log.                                                                                      |
+| `chapters`          | `async def chapters(self, project_id: str, source: str, run_kind: str) -> LogChaptersResult`           | `LogChaptersResult` | The stream's runs (chapters): begin/end/outcome per run.                                             |
+| `read`              | `async def read(self, project_id: str, source: str, run_kind: str, *, from_seq=None, to_seq=None, from_time=None, to_time=None, to_segment=None, cursor=None, max_events=None, max_bytes=None, types=None) -> LogReadResult` | `LogReadResult`  | Ranged, paged event read over the continuum; filter by sequence, time, segment, or event `types`.       |
+| `segment`           | `async def segment(self, project_id: str, source: str, run_kind: str, segment: int, *, offset: int = 0, max_bytes=None) -> LogSegmentResult` | `LogSegmentResult` | Fetches one segment's raw JSONL bytes, chunked by byte offset.                                        |
+| `delete`            | `async def delete(self, project_id: str, source: str, run_kind: str, *, before_time=None, all: bool = False) -> LogDeleteResult` | `LogDeleteResult` | Deletes run log data, either everything (`all=True`) or events before `before_time`.                    |
 | `open_event_stream` | `def open_event_stream(self, project_id: str, source: str, run_kind: str) -> LogEventStream`           | `LogEventStream` | DVR session: `seek()`, `get_status()`, `get_console()`, `get_traces()`, `get_trace()`, `play()`, `pause()`, `close_event_stream()`. |
 
 **Example - tail a run's console and traces:**
@@ -419,7 +424,7 @@ from rocketride import RocketRideClient
 
 
 async def main():
-    client = RocketRideClient(uri='https://api.rocketride.ai', auth='my-key')
+    client = RocketRideClient(uri='ws://localhost:5565', auth='my-key')
     await client.connect()
     result = await client.use(filepath='pipeline.pipe')
     token = result['token']
@@ -440,7 +445,7 @@ from rocketride import RocketRideClient
 
 
 async def main():
-    async with RocketRideClient(uri='wss://api.rocketride.ai', auth='my-key') as client:
+    async with RocketRideClient(uri='ws://localhost:5565', auth='my-key') as client:
         result = await client.use(pipeline=my_pipeline_config)
         token = result['token']
         await client.send(token, '{"data": 1}')
@@ -461,7 +466,7 @@ from rocketride import RocketRideClient
 
 async def main():
     client = RocketRideClient(
-        uri='https://api.rocketride.ai',
+        uri='ws://localhost:5565',
         auth='my-key',
         persist=True,
         on_connected=lambda info: print('Connected:', info),
@@ -485,7 +490,7 @@ from rocketride import RocketRideClient
 
 
 async def main():
-    client = RocketRideClient(uri='https://api.rocketride.ai', auth='my-key')
+    client = RocketRideClient(uri='ws://localhost:5565', auth='my-key')
     await client.connect()
     result = await client.use(filepath='vectorize.pipe')
     token = result['token']
@@ -520,7 +525,7 @@ from rocketride import RocketRideClient
 
 
 async def main():
-    async with RocketRideClient(uri='https://api.rocketride.ai', auth='my-key') as client:
+    async with RocketRideClient(uri='ws://localhost:5565', auth='my-key') as client:
         result = await client.use(filepath='ingest.pipe')
         token = result['token']
         pipe = await client.pipe(token, objinfo={'name': 'large.csv'}, mime_type='text/csv')
@@ -548,7 +553,7 @@ from rocketride.schema import Question, Answer
 
 
 async def main():
-    async with RocketRideClient(uri='https://api.rocketride.ai', auth='my-key') as client:
+    async with RocketRideClient(uri='ws://localhost:5565', auth='my-key') as client:
         result = await client.use(filepath='chat_pipeline.pipe')
         token = result['token']
         question = Question(expectJson=True)
@@ -577,9 +582,9 @@ from rocketride import RocketRideClient
 
 
 async def main():
-    client = RocketRideClient(uri='https://api.rocketride.ai', auth='my-key')
+    client = RocketRideClient(uri='ws://localhost:5565', auth='my-key')
     await client.connect()
-    services = await client.get_services()
+    services = (await client.get_services())['services']
     print('Available:', list(services.keys()))
     ocr = await client.get_service('ocr')
     if ocr:
@@ -616,17 +621,17 @@ All commands accept `--uri` and `--apikey` flags, or read from environment varia
 
 | Variable            | Description                                                                                            |
 | ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `ROCKETRIDE_URI`    | Server URI: `https://api.rocketride.ai` for RocketRide Cloud, or e.g. `ws://localhost:5565` self-hosted |
+| `ROCKETRIDE_URI`    | Server URI: e.g. `ws://localhost:5565` for a self-hosted engine, or `https://api.rocketride.ai` for RocketRide Cloud |
 | `ROCKETRIDE_APIKEY` | API key for authentication                                                                             |
 
 ## Links
 
 - [Documentation](https://docs.rocketride.org/)
-- [RocketRide Cloud](https://cloud.rocketride.ai/)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
 - [TypeScript SDK](https://www.npmjs.com/package/rocketride)
 - [Discord](https://discord.gg/PMXrtenMsY)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
+- [RocketRide Cloud](https://cloud.rocketride.ai/)
 
 ## License
 

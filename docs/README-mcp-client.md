@@ -33,7 +33,7 @@ Configure your MCP client to use the server (see examples below), then ask your 
 
 ## How It Works
 
-The MCP server connects to a running RocketRide engine and dynamically exposes your pipelines as MCP tools. When an AI assistant calls a tool, the server sends the file to the corresponding pipeline and returns the result.
+The MCP server connects to a running RocketRide engine over DAP (Debug Adapter Protocol) on a WebSocket and dynamically exposes your pipelines as MCP tools. When an AI assistant calls a tool, the server sends the file to the corresponding pipeline and returns the result.
 
 ```
 AI Assistant (Claude, Cursor, ...)
@@ -57,10 +57,10 @@ Running pipelines are discovered automatically - start a pipeline in VS Code or 
 It lets you build, debug, and deploy production AI workflows without leaving your IDE,
 using a visual drag-and-drop canvas or code-first with TypeScript and Python SDKs.
 
-- **85+ pipeline nodes**: 13 LLM providers, 8 vector databases, OCR, NER, PII anonymization, and more
-- **High-performance C++ engine**: multithreaded, production-grade speed and reliability
-- **Two ways to run**: [RocketRide Cloud](https://cloud.rocketride.ai/) (managed hosting, now live), or self-hosted with Docker, on-prem, or local, free
-- **MIT licensed**: fully open source, OSI-compliant, no lock-in
+- **115+ pipeline nodes**: 16 LLM providers, 9 vector databases, OCR, NER, PII anonymization, and more
+- **High-performance C++ engine**: native multithreading built for AI and data workloads
+- **Two ways to run**: self-hosted (free, MIT licensed) with Docker, on-prem, or locally; or [RocketRide Cloud](https://cloud.rocketride.ai/) managed hosting
+- **MIT licensed**: fully open source, OSI-compliant
 
 ## Installation
 
@@ -75,6 +75,8 @@ Requires Python 3.10+ and `rocketride` >= 1.0.4.
 The examples below point at a local engine (`ws://localhost:5565`). To use [RocketRide Cloud](https://cloud.rocketride.ai/) instead, set `ROCKETRIDE_URI` to `https://api.rocketride.ai` and use your Cloud API token as `ROCKETRIDE_AUTH`.
 
 If you prefer not to install the package, replace `"command": "rocketride-mcp"` with `"command": "uvx"` and `"args": ["rocketride-mcp"]` in the snippets below.
+
+Treat `ROCKETRIDE_AUTH` as a secret. The `"your-api-key"` values below are placeholders: prefer referencing an environment variable over hardcoding a real key, especially in files that get committed (`.cursor/mcp.json` often does). Never commit real keys.
 
 ### Claude Desktop
 
@@ -118,10 +120,10 @@ Add to `.cursor/mcp.json` in your workspace:
 ### Claude Code
 
 ```bash
-claude mcp add rocketride -- rocketride-mcp
+claude mcp add rocketride -e ROCKETRIDE_URI=ws://localhost:5565 -e ROCKETRIDE_AUTH=your-api-key -- rocketride-mcp
 ```
 
-Set `ROCKETRIDE_URI` and `ROCKETRIDE_AUTH` in your environment before running.
+Or omit the `-e` flags and set `ROCKETRIDE_URI` and `ROCKETRIDE_AUTH` in your environment before running.
 
 ### Command line
 
@@ -279,10 +281,10 @@ Set these environment variables (required; no config file is used):
 ## Links
 
 - [Documentation](https://docs.rocketride.org/)
-- [RocketRide Cloud](https://cloud.rocketride.ai/)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
 - [Discord](https://discord.gg/PMXrtenMsY)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
+- [RocketRide Cloud](https://cloud.rocketride.ai/)
 
 ## License
 
