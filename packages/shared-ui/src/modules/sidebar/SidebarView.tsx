@@ -16,7 +16,7 @@
 
 import React, { useState, useCallback, CSSProperties } from 'react';
 import { commonStyles } from '../../themes/styles';
-import { BxPlus, BxDesktop, BxChevronRight, BxChevronDown, BxStop } from '../../components/BoxIcon';
+import { BxPlus, BxDesktop, BxChevronRight, BxChevronDown, BxStop, BxCloudUpload } from '../../components/BoxIcon';
 import { SidebarMenu } from '../../components/sidebar-menu/SidebarMenu';
 import { Explorer, NOOP_VFS } from '../explorer';
 import type { ISidebarViewProps } from './types';
@@ -120,6 +120,7 @@ export const SidebarView: React.FC<ISidebarViewProps> = ({ connection, isSubscri
 		entries: [
 			{ id: 'new', label: 'New pipeline', icon: <BxPlus size={16} /> },
 			{ id: 'monitor', label: 'Monitor', icon: <BxDesktop size={16} />, disabled: !isConnected },
+			{ id: 'installCapsule', label: 'Install node capsule', icon: <BxCloudUpload size={16} />, disabled: !isConnected },
 		],
 	};
 
@@ -166,7 +167,7 @@ export const SidebarView: React.FC<ISidebarViewProps> = ({ connection, isSubscri
 					menu={navMenu}
 					activeId=""
 					onSelect={(id) => {
-						if (id === 'new' || id === 'monitor') onNavigate(id);
+						if (id === 'new' || id === 'monitor' || id === 'installCapsule') onNavigate(id);
 					}}
 				/>
 			</div>
