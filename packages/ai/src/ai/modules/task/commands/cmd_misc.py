@@ -211,6 +211,15 @@ class MiscCommands(DAPConn):
                 text = await self._read_store_text(fs, f'{STORE_NODES_ROOT}/{name}/services.json')
                 definition = load_relaxed_json(text)
                 definition['source'] = 'capsule'
+                # The client's buildInventory() skips entries without a truthy
+                # ``Pipe`` ({schema, ui}) — that map is produced by the C++ init
+                # transform, which the persistent engine can't run post-init. Give
+                # the node a Pipe built from its declared fields so it shows in the
+                # catalog; the per-run child loads the REAL node (ports/config)
+                # from --node_path at execution time.
+                if not definition.get('Pipe'):
+                    fields = definition.get('fields') if isinstance(definition.get('fields'), dict) else {}
+                    definition['Pipe'] = {'schema': {'type': 'object', 'properties': fields}, 'ui': {}}
                 overlay[name] = definition
                 _clog(f'overlay: added {name!r} classType={definition.get("classType")}')
             except Exception as e:
