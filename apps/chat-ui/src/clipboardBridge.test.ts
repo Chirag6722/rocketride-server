@@ -156,9 +156,11 @@ test('embedded clipboard shortcuts recognize Command and Control variants', () =
 	}
 });
 
-test('embedded clipboard shortcuts ignore unmodified and Alt-modified keys', () => {
+test('embedded clipboard shortcuts ignore unmodified, Alt-modified, and Shift-modified keys', () => {
 	assert.equal(getEmbeddedClipboardCommand({ key: 'a', metaKey: false, ctrlKey: false }), undefined);
 	assert.equal(getEmbeddedClipboardCommand({ key: 'c', metaKey: true, ctrlKey: false, altKey: true }), undefined);
+	assert.equal(getEmbeddedClipboardCommand({ key: 'a', metaKey: true, ctrlKey: false, shiftKey: true }), undefined);
+	assert.equal(getEmbeddedClipboardCommand({ key: 'C', metaKey: false, ctrlKey: true, shiftKey: true }), undefined);
 	assert.equal(getEmbeddedClipboardCommand({ key: 'z', metaKey: true, ctrlKey: false }), undefined);
 });
 

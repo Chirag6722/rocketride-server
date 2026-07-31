@@ -20,6 +20,7 @@ export interface EmbeddedClipboardKeyboardEvent {
 	metaKey: boolean;
 	ctrlKey: boolean;
 	altKey?: boolean;
+	shiftKey?: boolean;
 }
 
 export interface ChatHostCapabilities {
@@ -54,7 +55,7 @@ export function getSanitizedChatPath(pathname: string, search: string): string {
 export function getEmbeddedClipboardCommand(
 	event: EmbeddedClipboardKeyboardEvent
 ): EmbeddedClipboardCommand | undefined {
-	if ((!event.metaKey && !event.ctrlKey) || event.altKey) return undefined;
+	if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return undefined;
 
 	switch (event.key.toLowerCase()) {
 		case 'a':
