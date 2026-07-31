@@ -307,6 +307,12 @@
 				"category": "RocketRide"
 			},
 			{
+				"command": "rocketride.node.installCapsule",
+				"title": "Install Node Capsule (.rr)",
+				"category": "RocketRide",
+				"icon": "$(cloud-upload)"
+			},
+			{
 				"command": "rocketride.sidebar.connection.connect",
 				"title": "Connect to Server",
 				"category": "RocketRide",

@@ -432,6 +432,40 @@ function registerUtilityCommands(context: vscode.ExtensionContext): void {
 			await refreshAllProviders();
 			vscode.window.showInformationMessage('RocketRide views refreshed');
 		}),
+		vscode.commands.registerCommand('rocketride.node.installCapsule', async () => {
+			const logger = getLogger();
+			try {
+				const client = connectionManager?.getClient();
+				if (!client) {
+					vscode.window.showWarningMessage('Not connected to a RocketRide engine. Connect first.');
+					return;
+				}
+				const uris = await vscode.window.showOpenDialog({
+					canSelectMany: false,
+					openLabel: 'Install',
+					filters: { 'Node Capsule': ['rr'] },
+				});
+				if (!uris?.length) {
+					return;
+				}
+				const bytes = await vscode.workspace.fs.readFile(uris[0]);
+				const capsule = Buffer.from(bytes).toString('base64');
+				const res = await client.call<{ ok?: boolean; installed?: string; violations?: string[] }>(
+					'rrext_install_node',
+					{ capsule },
+				);
+				if (res?.ok) {
+					vscode.window.showInformationMessage(`Node capsule installed: ${res.installed}`);
+					await refreshAllProviders();
+				} else {
+					const why = (res?.violations ?? ['unknown reason']).join('; ');
+					vscode.window.showWarningMessage(`Airlock rejected the capsule: ${why}`);
+				}
+			} catch (err) {
+				logger.error(`[InstallCapsule] failed: ${err}`);
+				vscode.window.showErrorMessage(`Failed to install node capsule: ${err}`);
+			}
+		}),
 		vscode.commands.registerCommand('rocketride.agents.install', async () => {
 			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 			if (!workspaceFolder) {
