@@ -220,6 +220,20 @@ class MiscCommands(DAPConn):
                 if not definition.get('Pipe'):
                     fields = definition.get('fields') if isinstance(definition.get('fields'), dict) else {}
                     definition['Pipe'] = {'schema': {'type': 'object', 'properties': fields}, 'ui': {}}
+                # Inline the node's icon SVG as a data: URI. A capsule's SVG isn't
+                # in the client's build-time icon scan (that only covers built-in
+                # nodes/src/nodes), so a bare filename renders as "unknown". The
+                # client Icon component renders data: URIs via <img>.
+                icon = definition.get('icon')
+                if isinstance(icon, str) and icon.lower().endswith('.svg'):
+                    try:
+                        import base64
+
+                        svg = await self._read_store_text(fs, f'{STORE_NODES_ROOT}/{name}/{icon}')
+                        b64 = base64.b64encode(svg.encode('utf-8')).decode('ascii')
+                        definition['icon'] = f'data:image/svg+xml;base64,{b64}'
+                    except Exception as e:
+                        _clog(f'overlay: icon inline failed for {name!r}: {e}')
                 overlay[name] = definition
                 _clog(f'overlay: added {name!r} classType={definition.get("classType")}')
             except Exception as e:

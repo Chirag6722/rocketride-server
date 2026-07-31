@@ -38,20 +38,22 @@
 import * as React from 'react';
 
 /** Matches absolute http(s)/ftp URLs (e.g. icons supplied by remote services). */
-const isUrl = (value: string): boolean =>
-	/^(https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i.test(value);
+const isUrl = (value: string): boolean => /^(https?|ftp):\/\/[^\s/$.?#].[^\s]*$/i.test(value);
 
-type SvgComponent = React.ForwardRefExoticComponent<
-	React.SVGProps<SVGSVGElement> & React.RefAttributes<SVGSVGElement>
->;
+/**
+ * True for anything renderable as an `<img src>`: remote URLs and inline
+ * `data:` URIs. Installed node capsules carry their icon SVG inline as a
+ * `data:image/svg+xml;base64,…` URI (their SVG isn't in the build-time scan),
+ * so it must take the `<img>` path like a remote URL.
+ */
+const isImgSrc = (value: string): boolean => isUrl(value) || value.startsWith('data:');
+
+type SvgComponent = React.ForwardRefExoticComponent<React.SVGProps<SVGSVGElement> & React.RefAttributes<SVGSVGElement>>;
 
 // Build-time directory scan. The path is 6 levels up from this file:
 //   packages/shared-ui/src/components/canvas/util/ → repo root → nodes/src/nodes/
 // Each match resolves to an SVGR-generated React component (default export).
-const iconContext = import.meta.webpackContext(
-	'../../../../../../nodes/src/nodes',
-	{ recursive: true, regExp: /\.svg$/, mode: 'sync' },
-);
+const iconContext = import.meta.webpackContext('../../../../../../nodes/src/nodes', { recursive: true, regExp: /\.svg$/, mode: 'sync' });
 
 // filename (without extension) → component
 const iconComponents = new Map<string, SvgComponent>();
@@ -155,21 +157,12 @@ export const Icon: React.FC<IconProps> = ({ name, alt = '', style, ...svgProps }
 		return UnknownIcon ? <InlineSvgIcon component={UnknownIcon} {...svgProps} style={mergedStyle} /> : null;
 	}
 
-	if (isUrl(name)) {
-		// Remote/external URL — render as <img>. Forward props that apply to
+	if (isImgSrc(name)) {
+		// Remote/external URL or inline data: URI — render as <img>. Forward props that apply to
 		// both element types (width/height/style/className) so callers don't
 		// need a separate code path for the URL case.
 		const { width, height, className } = svgProps as React.SVGProps<SVGSVGElement>;
-		return (
-			<img
-				src={name}
-				alt={alt}
-				width={width as number | string | undefined}
-				height={height as number | string | undefined}
-				style={style as React.CSSProperties | undefined}
-				className={className}
-			/>
-		);
+		return <img src={name} alt={alt} width={width as number | string | undefined} height={height as number | string | undefined} style={style as React.CSSProperties | undefined} className={className} />;
 	}
 
 	const key = name.replace(/\.(svg|png|jpg|jpeg)$/i, '');
