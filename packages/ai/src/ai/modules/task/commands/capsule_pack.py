@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 """
-Capsule packer — turn a node folder into a ``.rr`` capsule the airlock accepts.
+Capsule packer — turn a node folder into a ``.rrc`` capsule the airlock accepts.
 
 Mirrors the format defined in ``capsule_airlock``: a ZIP with ``capsule.json`` at
 the root and the node under ``local_nodes/<name>/``. The sha256 is computed with
@@ -30,7 +30,7 @@ passes the checksum gate.
 
 CLI:
     python -m ai.modules.task.commands.capsule_pack \\
-        --node /path/to/claude_code_agent --out claude_code_agent.rr \\
+        --node /path/to/claude_code_agent --out claude_code_agent.rrc \\
         --declares network subprocess
 """
 
@@ -57,7 +57,7 @@ def pack_node_dir(node_src_dir: str, version: str = '0.0.0', declares: Optional[
         declares: Capability strings the node needs (network/subprocess/filesystem).
 
     Returns:
-        The ``.rr`` bytes, ready to send to ``rrext_install_node``.
+        The ``.rrc`` bytes, ready to send to ``rrext_install_node``.
     """
     node_src_dir = os.path.abspath(node_src_dir)
     name = os.path.basename(node_src_dir.rstrip('/'))
@@ -100,9 +100,9 @@ def pack_node_dir(node_src_dir: str, version: str = '0.0.0', declares: Optional[
 def _main() -> int:
     import argparse
 
-    ap = argparse.ArgumentParser(description='Pack a node folder into a .rr capsule')
+    ap = argparse.ArgumentParser(description='Pack a node folder into a .rrc capsule')
     ap.add_argument('--node', required=True, help='path to the node source folder')
-    ap.add_argument('--out', required=True, help='output .rr path')
+    ap.add_argument('--out', required=True, help='output .rrc path')
     ap.add_argument('--version', default='0.0.0')
     ap.add_argument('--declares', nargs='*', default=[], help='declared capabilities')
     args = ap.parse_args()

@@ -23,9 +23,9 @@
 """
 Capsule airlock — the mandatory secure-first gate for installable node capsules.
 
-A node capsule is a ``.rr`` file (a ZIP) carrying a self-contained node:
+A node capsule is a ``.rrc`` file (a ZIP) carrying a self-contained node:
 
-    <node>.rr
+    <node>.rrc
     ├── capsule.json              # manifest: name, protocol, version, sha256, declares[]
     └── local_nodes/
         └── <node>/
@@ -89,7 +89,7 @@ class CapsuleInfo:
 
 def validate_capsule(zip_bytes: bytes) -> CapsuleInfo:
     """
-    Run the full airlock over raw ``.rr`` bytes.
+    Run the full airlock over raw ``.rrc`` bytes.
 
     Returns a ``CapsuleInfo`` on success. Raises ``AirlockRejected`` (with every
     violation found) on any failure. The caller MUST NOT persist or execute a

@@ -23,7 +23,7 @@
 """
 InstallNodeCommands: DAP handler for ``rrext_install_node`` — the capsule launcher.
 
-Installs a self-contained node capsule (``.rr``) into the caller's store so it
+Installs a self-contained node capsule (``.rrc``) into the caller's store so it
 becomes usable in pipelines, without restarting the engine:
 
     client (VSCode / SaaS web)  --rrext_install_node-->  engine
@@ -64,8 +64,8 @@ class InstallNodeCommands(DAPConn):
         Install a node capsule for the authenticated caller.
 
         Arguments (in ``request['arguments']``):
-            capsule (str): base64-encoded ``.rr`` bytes (primary path), OR
-            path (str):    store path to an already-uploaded ``.rr``.
+            capsule (str): base64-encoded ``.rrc`` bytes (primary path), OR
+            path (str):    store path to an already-uploaded ``.rrc``.
 
         Returns a DAP response whose body is either
             {'ok': True, 'installed': <name>, 'protocol': <p>, 'version': <v>} or
@@ -100,7 +100,7 @@ class InstallNodeCommands(DAPConn):
     # -------------------------------------------------------------------------
 
     async def _resolve_capsule_bytes(self, args: Dict[str, Any]) -> bytes:
-        """Get the raw .rr bytes from a base64 payload or an uploaded store path."""
+        """Get the raw .rrc bytes from a base64 payload or an uploaded store path."""
         b64 = args.get('capsule')
         if b64:
             try:

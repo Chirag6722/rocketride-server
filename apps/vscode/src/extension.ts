@@ -443,7 +443,7 @@ function registerUtilityCommands(context: vscode.ExtensionContext): void {
 				const uris = await vscode.window.showOpenDialog({
 					canSelectMany: false,
 					openLabel: 'Install',
-					filters: { 'Node Capsule': ['rr'] },
+					filters: { 'RocketRide Capsule': ['rrc'] },
 				});
 				if (!uris?.length) {
 					return;

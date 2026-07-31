@@ -308,7 +308,7 @@
 			},
 			{
 				"command": "rocketride.node.installCapsule",
-				"title": "Install Node Capsule (.rr)",
+				"title": "Install Node Capsule (.rrc)",
 				"category": "RocketRide",
 				"icon": "$(cloud-upload)"
 			},
