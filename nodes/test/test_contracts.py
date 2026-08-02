@@ -238,9 +238,8 @@ GENERATED_MARKER = '<!-- ROCKETRIDE:GENERATED:PARAMS START -->'
 
 def service_slug(file_path: Path) -> str:
     """Slug of a services file: services.json -> '', services.parse.json -> 'parse'."""
-    stem = file_path.name
-    stem = re.sub(r'\.json$', '', stem)
-    return re.sub(r'^services\.?', '', stem)
+    name = get_service_name(file_path)
+    return '' if name == 'default' else name
 
 
 def variant_owner(variant: str, slugs: List[str]) -> Optional[str]:
