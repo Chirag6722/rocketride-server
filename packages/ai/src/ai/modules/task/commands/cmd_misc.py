@@ -180,25 +180,13 @@ class MiscCommands(DAPConn):
         from .capsule_airlock import load_relaxed_json
         from .cmd_install_node import STORE_NODES_ROOT
 
-        def _clog(msg):
-            try:
-                with open('/tmp/capsule-overlay.log', 'a') as fh:
-                    fh.write(msg + '\n')
-            except Exception:
-                pass
-
         try:
             from ai.account import Store
 
             ctx = self.request_context()
-            _clog(
-                f'overlay: ctx account_info={getattr(ctx, "account_info", "?")!r} client_id={getattr(ctx, "client_id", "?")!r}'
-            )
             fs = Store.file_store(ctx)
             listing = await fs.list_dir(STORE_NODES_ROOT)
-            _clog(f'overlay: list_dir({STORE_NODES_ROOT}) -> {listing}')
         except Exception as e:
-            _clog(f'overlay: store access FAILED: {type(e).__name__}: {e}')
             self.debug_message(f'capsule overlay: no installed nodes ({e})')
             return {}
 
@@ -233,13 +221,10 @@ class MiscCommands(DAPConn):
                         b64 = base64.b64encode(svg.encode('utf-8')).decode('ascii')
                         definition['icon'] = f'data:image/svg+xml;base64,{b64}'
                     except Exception as e:
-                        _clog(f'overlay: icon inline failed for {name!r}: {e}')
+                        self.debug_message(f'capsule overlay: icon inline failed for {name!r} ({e})')
                 overlay[name] = definition
-                _clog(f'overlay: added {name!r} classType={definition.get("classType")}')
             except Exception as e:
-                _clog(f'overlay: skip {name!r}: {type(e).__name__}: {e}')
                 self.debug_message(f'capsule overlay: skip {name!r} ({e})')
-        _clog(f'overlay: returning {list(overlay.keys())}')
         return overlay
 
     async def _read_store_text(self, fs, path: str) -> str:
