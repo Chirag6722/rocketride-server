@@ -78,9 +78,10 @@ from the specs:
 Do not treat a null `total` from any of them as an empty result or as a bug: page with
 `has_more` instead. The tools that do report a count are `contact_list`, `contact_search`,
 `conversation_search`, `message_export`, `opportunity_search`,
-`opportunity_search_advanced` and `user_search`. Two of those, `contact_list_by_business`
-and `lost_reason_list`, read a count the endpoint documents but never sent on any live
-response, which is why they are in the null list above.
+`opportunity_search_advanced` and `user_search`. Two additional tools,
+`contact_list_by_business` and `lost_reason_list`, read a count field their endpoints
+document, but no observed live response ever carried it, which is why they stay in the
+null list above.
 
 GoHighLevel does not have one pagination style. The contacts list pages on a
 `startAfter` plus `startAfterId` pair, the searches page on an opaque `searchAfter` value,
@@ -244,7 +245,7 @@ and roughly 40 tools it can only ever fail on are 40 tools' worth of wasted cont
 Tools are published as `gohighlevel.<tool>`. The **Writes** column marks the tools that
 read-only mode hides.
 
-#### `appointment_notes` (4 tools, opt in)
+### `appointment_notes` (4 tools, opt in)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -253,7 +254,7 @@ read-only mode hides.
 | `appointment_notes_list` |  | List the notes written on one appointment. |
 | `appointment_notes_update` | yes | Replace the text of a note on an appointment. |
 
-#### `appointments` (9 tools, default)
+### `appointments` (9 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -267,7 +268,7 @@ read-only mode hides.
 | `blocked_slot_list` |  | List the blocked time on a calendar, a user or a calendar group inside a time window: the periods that are deliberately unavailable rather than booked. |
 | `blocked_slot_update` | yes | Move or retitle a blocked slot. |
 
-#### `businesses` (5 tools, opt in)
+### `businesses` (5 tools, opt in)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -277,7 +278,7 @@ read-only mode hides.
 | `business_list` |  | List the businesses on the configured sub-account. |
 | `business_update` | yes | Update a business. |
 
-#### `calendar_groups` (6 tools, opt in)
+### `calendar_groups` (6 tools, opt in)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -288,7 +289,7 @@ read-only mode hides.
 | `calendar_group_status_set` | yes | Enable or disable a calendar group without deleting it. |
 | `calendar_group_update` | yes | Replace the name, description and slug of a calendar group. |
 
-#### `calendars` (5 tools, default)
+### `calendars` (5 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -298,7 +299,7 @@ read-only mode hides.
 | `calendar_list` |  | List the calendars in the configured sub-account. |
 | `calendar_update` | yes | Update a calendar. |
 
-#### `contact_notes` (5 tools, default)
+### `contact_notes` (5 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -308,7 +309,7 @@ read-only mode hides.
 | `contact_notes_list` |  | List the notes on a contact. |
 | `contact_notes_update` | yes | Update a note. |
 
-#### `contact_tasks` (6 tools, default)
+### `contact_tasks` (6 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -319,7 +320,7 @@ read-only mode hides.
 | `contact_tasks_set_completed` | yes | Mark a task done, or reopen one, without touching its title, due date or assignee. |
 | `contact_tasks_update` | yes | Update a task. |
 
-#### `contacts` (16 tools, default)
+### `contacts` (16 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -340,7 +341,7 @@ read-only mode hides.
 | `contact_workflow_add` | yes | Enrol a contact in a workflow. |
 | `contact_workflow_remove` | yes | Remove a contact from a workflow. |
 
-#### `conversations` (5 tools, default)
+### `conversations` (5 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -350,7 +351,7 @@ read-only mode hides.
 | `conversation_search` |  | Find conversations in the configured sub-account, by contact, owner, channel, read state or free text. |
 | `conversation_update` | yes | Update a conversation read state, star or feedback. |
 
-#### `custom_fields` (5 tools, default)
+### `custom_fields` (5 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -360,7 +361,7 @@ read-only mode hides.
 | `custom_field_list` |  | List the custom field definitions on the configured sub-account. |
 | `custom_field_update` | yes | Update a custom field definition. |
 
-#### `custom_values` (5 tools, opt in)
+### `custom_values` (5 tools, opt in)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -370,7 +371,7 @@ read-only mode hides.
 | `custom_value_list` |  | List the custom values on the configured sub-account. |
 | `custom_value_update` | yes | Replace a custom value. |
 
-#### `location_tags` (5 tools, opt in)
+### `location_tags` (5 tools, opt in)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -380,14 +381,14 @@ read-only mode hides.
 | `location_tags_list` |  | List every tag defined on the configured sub-account, with the id of each. |
 | `location_tags_update` | yes | Rename a tag definition. |
 
-#### `locations` (2 tools, opt in)
+### `locations` (2 tools, opt in)
 
 | Tool | Writes | Description |
 |---|---|---|
 | `location_get` |  | Get the configured sub-account, which GoHighLevel also calls a location. |
 | `location_tasks_search` |  | Search tasks across the whole sub-account, optionally narrowed by contact, assignee, business, completion state or free text. |
 
-#### `messages` (8 tools, default)
+### `messages` (8 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -400,7 +401,7 @@ read-only mode hides.
 | `message_send` | yes | Send a message to a contact on any channel: SMS, email, WhatsApp, Instagram, Facebook, RCS, TikTok, live chat or a custom provider. |
 | `message_transcription_get` |  | Get the speech-to-text transcription of a recorded call or voicemail. |
 
-#### `opportunities` (10 tools, default)
+### `opportunities` (10 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -415,14 +416,14 @@ read-only mode hides.
 | `opportunity_update` | yes | Update an opportunity. |
 | `opportunity_upsert` | yes | Update an opportunity when you pass its id, or create one when you do not. |
 
-#### `pipelines` (2 tools, default)
+### `pipelines` (2 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
 | `lost_reason_list` |  | List the reasons this sub-account records for a lost deal. |
 | `pipeline_list` |  | List the opportunity pipelines on the configured sub-account, each with its stages. |
 
-#### `users` (3 tools, default)
+### `users` (3 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
@@ -430,7 +431,7 @@ read-only mode hides.
 | `user_list_by_location` |  | List every user of the configured sub-account in one response. |
 | `user_search` |  | Find users of the configured sub-account by name, email, phone or role. |
 
-#### `request` (1 tool, gated by `allowRawRequest`)
+### `request` (1 tool, gated by `allowRawRequest`)
 
 | Tool | Writes | Description |
 |---|---|---|

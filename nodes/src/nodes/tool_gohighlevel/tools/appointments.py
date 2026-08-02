@@ -521,7 +521,7 @@ class AppointmentsMixin(GoHighLevelToolsBase):
     @gohighlevel_tool(
         group='appointments',
         writes=True,
-        input_schema=schema(**_BLOCKED_SLOT_WRITE_PROPS),
+        input_schema=schema(required=['startTime', 'endTime'], **_BLOCKED_SLOT_WRITE_PROPS),
         description=(
             'Block a period on a calendar or on a user so it cannot be booked. '
             f'{_BLOCKED_SLOT_OWNER_DESC} Use appointment_delete to remove the block again: GoHighLevel has no '
@@ -531,6 +531,8 @@ class AppointmentsMixin(GoHighLevelToolsBase):
     )
     def blocked_slot_create(self, args):
         args = self._args(args, 'blocked_slot_create')
+        require_text(args, 'startTime', 'blocked_slot_create')
+        require_text(args, 'endTime', 'blocked_slot_create')
         body = body_from(args, _BLOCKED_SLOT_WRITE_KEYS, tool='blocked_slot_create')
         _require_any_of(body, ('calendarId', 'assignedUserId'), 'blocked_slot_create', _BLOCKED_SLOT_OWNER_DESC)
         body['locationId'] = self._location()

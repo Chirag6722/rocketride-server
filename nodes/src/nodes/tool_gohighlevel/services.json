@@ -57,7 +57,8 @@
 			"title": "Tool groups",
 			"description": "Which groups of GoHighLevel tools this node publishes to the agent. This node implements 101 tools across 17 groups, far more than an LLM can choose between reliably, so only the listed groups are exposed. <b>Leave this empty for the recommended set</b>: 74 tools across appointments, calendars, contact_notes, contact_tasks, contacts, conversations, custom_fields, messages, opportunities, pipelines and users, which is everything an agent needs to run lead nurture and appointment booking end to end. Use <b>all</b> to publish all 101. Available groups: appointment_notes, appointments, businesses, calendar_groups, calendars, contact_notes, contact_tasks, contacts, conversations, custom_fields, custom_values, location_tags, locations, messages, opportunities, pipelines, users.",
 			"items": {
-				"type": "string"
+				"type": "string",
+				"enum": ["appointment_notes", "appointments", "businesses", "calendar_groups", "calendars", "contact_notes", "contact_tasks", "contacts", "conversations", "custom_fields", "custom_values", "location_tags", "locations", "messages", "opportunities", "pipelines", "users", "all"]
 			},
 			"default": [],
 			"optional": true

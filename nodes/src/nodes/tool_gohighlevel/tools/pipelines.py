@@ -33,6 +33,7 @@ from ._base import (
     LIST_OUTPUT,
     STR,
     GoHighLevelToolsBase,
+    bool_params,
     params_from,
     passthrough,
     schema,
@@ -56,22 +57,6 @@ _PIPELINE_ITEMS = (
 _LOST_REASON_ITEMS = 'The lost reasons on the sub-account, as GoHighLevel returns them.'
 
 _NO_NEXT_PAGE = 'Always null: this endpoint answers in one response, so there is no next page.'
-
-
-def _bool_params(args: dict, keys: tuple[str, ...]) -> dict:
-    """Render the supplied boolean arguments as the lowercase strings the query string needs.
-
-    ``requests`` renders a Python ``True`` into a query string as ``True``, and GoHighLevel
-    validates query parameters strictly enough to answer 422 for a value it does not
-    recognise, so the capitalised form cannot be sent. Anything that is not a real boolean is
-    dropped rather than coerced.
-    """
-    out: dict = {}
-    for key in keys:
-        value = args.get(key)
-        if isinstance(value, bool):
-            out[key] = 'true' if value else 'false'
-    return out
 
 
 class PipelinesMixin(GoHighLevelToolsBase):
@@ -118,7 +103,7 @@ class PipelinesMixin(GoHighLevelToolsBase):
     def lost_reason_list(self, args):
         args = self._args(args, 'lost_reason_list')
         params = params_from(args, ('name', 'query'))
-        params.update(_bool_params(args, ('deleted',)))
+        params.update(bool_params(args, ('deleted',)))
         params['locationId'] = self._location()
         # The path is singular. /opportunities/lost-reasons does not exist.
         return self._list(

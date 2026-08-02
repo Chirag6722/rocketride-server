@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..gohighlevel_client import normalize_success, paginated, split_custom_fields
+from ..gohighlevel_client import paginated, split_custom_fields
 from ..tool_groups import gohighlevel_tool
 from ._base import (
     ARR,
@@ -46,6 +46,9 @@ from ._base import (
     STR,
     GoHighLevelToolsBase,
     body_from,
+    bool_params,
+    flag_result,
+    follower_result,
     params_from,
     require_id,
     require_text,
@@ -54,6 +57,7 @@ from ._base import (
     search_after_page_body,
     start_after_cursor,
     start_after_params,
+    upsert_result,
 )
 
 #: Fields kept from an opportunity record.
@@ -131,7 +135,9 @@ _SEARCH_STATUSES = ('open', 'won', 'lost', 'abandoned', 'all')
 
 _STATUS_DESC = (
     'Stage of the deal: "open" while it is live, then "won", "lost" or "abandoned". Pass a lostReasonId '
-    'alongside "lost" when the sub-account has lost reasons configured; lost_reason_list returns them.'
+    'alongside "lost" when the sub-account has lost reasons configured; lost_reason_list returns them. Only '
+    'opportunity_status_update and opportunity_upsert take lostReasonId, so use one of those to record a '
+    'lost reason.'
 )
 
 _CUSTOM_FIELDS_WRITE = MIXED_ARR(
@@ -280,49 +286,9 @@ def _search_cursor(payload: Any, records: Any) -> dict | None:
     return start_after_cursor(records)
 
 
-def _bool_params(args: dict, keys: tuple[str, ...]) -> dict:
-    """Render the supplied boolean arguments as the lowercase strings the query string needs.
-
-    ``requests`` renders a Python ``True`` into a query string as ``True``, and GoHighLevel
-    validates query parameters strictly enough to answer 422 for a value it does not
-    recognise, so the capitalised form cannot be sent. Anything that is not a real boolean is
-    dropped rather than coerced: guessing at ``"yes"`` would send a filter the agent did not
-    ask for.
-    """
-    out: dict = {}
-    for key in keys:
-        value = args.get(key)
-        if isinstance(value, bool):
-            out[key] = 'true' if value else 'false'
-    return out
-
-
-def _follower_result(payload: Any) -> dict:
-    """Followers reported back by a follower write, plus the delta when the API states one."""
-    if not isinstance(payload, dict):
-        return {'followers': []}
-    out: dict = {'followers': payload.get('followers') or []}
-    for key in ('followersAdded', 'followersRemoved'):
-        if key in payload:
-            out[key] = payload[key] or []
-    return out
-
-
-def _flag_result(payload: Any) -> dict:
-    """Outcome of a call whose whole answer is a success flag.
-
-    On this surface the flag is spelled ``succeded``, with one "e", so it is read through
-    normalize_success rather than by name: reading ``succeeded`` returns None, which is falsy,
-    and a successful status change would report as a failure.
-    """
-    return {'ok': normalize_success(payload)}
-
-
 def _upsert_result(payload: Any) -> dict:
     """Upsert response: the opportunity, plus whether it was created rather than updated."""
-    if not isinstance(payload, dict):
-        return {'opportunity': _clean_opportunity(payload), 'new': None}
-    return {'opportunity': _clean_opportunity(payload.get('opportunity')), 'new': payload.get('new')}
+    return upsert_result(payload, 'opportunity', _clean_opportunity)
 
 
 class OpportunitiesMixin(GoHighLevelToolsBase):
@@ -392,7 +358,7 @@ class OpportunitiesMixin(GoHighLevelToolsBase):
                 ),
             )
         )
-        params.update(_bool_params(args, ('getTasks', 'getNotes', 'getCalendarEvents')))
+        params.update(bool_params(args, ('getTasks', 'getNotes', 'getCalendarEvents')))
         # snake_case, and the only endpoint on this surface that spells it that way. The
         # camelCase form is live-confirmed to fail: 422 "property locationId should not exist".
         params['location_id'] = self._location()
@@ -593,7 +559,7 @@ class OpportunitiesMixin(GoHighLevelToolsBase):
         opportunity_id = require_id(args, 'opportunityId', 'opportunity_status_update')
         require_text(args, 'status', 'opportunity_status_update')
         body = body_from(args, ('status', 'lostReasonId'))
-        return self._write('PUT', f'/opportunities/{opportunity_id}/status', _flag_result, body=body)
+        return self._write('PUT', f'/opportunities/{opportunity_id}/status', flag_result, body=body)
 
     # -- followers ---------------------------------------------------------
 
@@ -619,7 +585,7 @@ class OpportunitiesMixin(GoHighLevelToolsBase):
         args = self._args(args, 'opportunity_followers_add')
         opportunity_id = require_id(args, 'opportunityId', 'opportunity_followers_add')
         body = body_from(args, ('followers',))
-        return self._write('POST', f'/opportunities/{opportunity_id}/followers', _follower_result, body=body)
+        return self._write('POST', f'/opportunities/{opportunity_id}/followers', follower_result, body=body)
 
     @gohighlevel_tool(
         group='opportunities',
@@ -645,11 +611,11 @@ class OpportunitiesMixin(GoHighLevelToolsBase):
         args = self._args(args, 'opportunity_followers_remove')
         opportunity_id = require_id(args, 'opportunityId', 'opportunity_followers_remove')
         body = body_from(args, ('followers',))
-        params = _bool_params(args, ('isRemoveAllFollowers',))
+        params = bool_params(args, ('isRemoveAllFollowers',))
         return self._write(
             'DELETE',
             f'/opportunities/{opportunity_id}/followers',
-            _follower_result,
+            follower_result,
             body=body,
             params=params,
         )

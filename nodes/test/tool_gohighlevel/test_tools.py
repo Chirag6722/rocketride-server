@@ -131,6 +131,14 @@ try:
     from tool_gohighlevel.IInstance import IInstance  # noqa: E402
     from tool_gohighlevel.tool_groups import ALL_GROUPS  # noqa: E402
 finally:
+    # The node submodules these imports created (tool_gohighlevel.gohighlevel_client,
+    # .IGlobal, .IInstance, .tool_groups, .tools.*) are removed along with the scaffold:
+    # they were built against the stubs installed above, and the offline suite imports the
+    # same names in the same pytest session, so leaving them cached would hand it whatever
+    # this file installed, with the outcome depending on collection order. The references
+    # this module holds keep the objects alive.
+    for _name in [key for key in sys.modules if key == 'tool_gohighlevel' or key.startswith('tool_gohighlevel.')]:
+        sys.modules.pop(_name, None)
     for _name, _module in _ORIGINAL.items():
         if _module is _MISSING:
             sys.modules.pop(_name, None)
@@ -206,7 +214,19 @@ class _PacedRequests:
 
 
 PACER = _PacedRequests(requests, MIN_INTERVAL)
-ghl.requests = PACER
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _pace_requests():
+    """Install the pacer for this suite and put the real ``requests`` reference back after.
+
+    Assigning ``ghl.requests`` at import time would leave the pacer inside the client module
+    for the rest of the pytest session, and the offline suite imports the same module objects.
+    """
+    original = ghl.requests
+    ghl.requests = PACER
+    yield
+    ghl.requests = original
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +459,7 @@ LISTINGS = [
 
 
 class TestListings:
-    @pytest.mark.parametrize('group,tool,args', LISTINGS, ids=[row[1] for row in LISTINGS])
+    @pytest.mark.parametrize('group,tool,args', LISTINGS, ids=[f'{row[0]}-{row[1]}' for row in LISTINGS])
     def test_listing(self, node, group, tool, args):
         result = getattr(node, tool)(args)
         check_page(result, tool, args.get('limit'))
@@ -672,7 +692,9 @@ class TestContactLifecycle:
             assert updated['body'].endswith('edited')
         finally:
             deleted = node.contact_notes_delete({'contactId': temp_contact['id'], 'noteId': note_id})
-            assert deleted['deleted'] is True
+        # Asserted outside the finally: an assert raised during exception handling would replace
+        # the failure from the try body as the reported one. Same in every lifecycle test below.
+        assert deleted['deleted'] is True
 
     def test_tasks_lifecycle(self, node, temp_contact):
         due = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat().replace('+00:00', 'Z')
@@ -688,7 +710,7 @@ class TestContactLifecycle:
             assert isinstance(completed, dict)
         finally:
             deleted = node.contact_tasks_delete({'contactId': temp_contact['id'], 'taskId': task_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
 
 @writes
@@ -716,7 +738,7 @@ class TestOpportunityLifecycle:
             assert after['status'] == 'won'
         finally:
             deleted = node.opportunity_delete({'opportunityId': opportunity_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
     def test_followers(self, node, pipeline, temp_contact):
         users = node.user_list_by_location({})['items']
@@ -794,7 +816,7 @@ class TestLocationSettingsLifecycles:
             assert renamed['name'].endswith('-v2')
         finally:
             deleted = node.location_tags_delete({'tagId': tag_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
     def test_custom_field_lifecycle(self, node):
         field = node.custom_field_create({'name': f'RocketRide live {UID}', 'dataType': 'TEXT'})
@@ -807,7 +829,7 @@ class TestLocationSettingsLifecycles:
             assert renamed['name'].endswith('v2')
         finally:
             deleted = node.custom_field_delete({'customFieldId': field_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
     def test_custom_field_round_trips_onto_a_contact(self, node, temp_contact):
         """Read tools return a map keyed by field id; write tools take an array. Prove both directions."""
@@ -838,7 +860,7 @@ class TestLocationSettingsLifecycles:
             assert updated['value'] == 'two'
         finally:
             deleted = node.custom_value_delete({'customValueId': value_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
 
 @writes
@@ -852,7 +874,7 @@ class TestBusinessLifecycle:
             assert renamed['name'].endswith('v2')
         finally:
             deleted = node.business_delete({'businessId': business_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
 
 @writes
@@ -886,7 +908,7 @@ class TestCalendarLifecycle:
             assert isinstance(status, dict)
         finally:
             deleted = node.calendar_group_delete({'groupId': group_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
     def test_free_slots(self, node, temp_calendar):
         start = int(time.time() * 1000)
@@ -904,15 +926,20 @@ class TestCalendarLifecycle:
             )
 
     def test_appointment_get_reads_the_right_envelope_key(self, node, temp_appointment):
-        """GET /calendars/events/appointments/{eventId} answers under "appointment", not "event"."""
-        note(
-            'Regression guard. GET /calendars/events/appointments/{eventId} answers under "appointment", while '
-            'both published specs declare "event". The tool passed the spec spelling and returned {} for every '
-            'appointment, because record_of only unwraps a key the payload carries and _clean_event then matched '
-            'none of its read keys. It now accepts ("appointment", "event"), wire spelling first. Only the get '
-            'was affected: create and update answer the record bare.'
-        )
+        """GET /calendars/events/appointments/{eventId} answers under "appointment", not "event".
+
+        Regression guard. Both published specs declare "event" while the live API answers under
+        "appointment". The tool once passed the spec spelling and returned {} for every
+        appointment, because record_of only unwraps a key the payload carries and _clean_event
+        then matched none of its read keys. It now accepts ("appointment", "event"), wire
+        spelling first. Only the get was affected: create and update answer the record bare.
+        """
         fetched = node.appointment_get({'eventId': temp_appointment['id']})
+        if fetched.get('id') != temp_appointment['id']:
+            note(
+                'appointment_get returned no usable record: GET /calendars/events/appointments/{eventId} may '
+                'have changed its envelope key away from "appointment"'
+            )
         assert fetched.get('id') == temp_appointment['id'], 'appointment_get dropped the whole record'
 
     def test_appointment_lifecycle(self, node, temp_calendar, temp_appointment):
@@ -948,7 +975,7 @@ class TestCalendarLifecycle:
             )
         finally:
             deleted = node.appointment_notes_delete({'appointmentId': temp_appointment['id'], 'noteId': note_id})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
     def test_blocked_slot_lifecycle(self, node, temp_calendar):
         start = datetime.now(timezone.utc).astimezone() + timedelta(days=5)
@@ -973,7 +1000,7 @@ class TestCalendarLifecycle:
             check_page(listed, 'blocked_slot_list')
         finally:
             deleted = node.appointment_delete({'eventId': blocked['id']})
-            assert deleted['deleted'] is True
+        assert deleted['deleted'] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1105,10 +1132,13 @@ class TestRateLimits:
 
     def test_no_retry_after_header(self, node):
         node.location_get({})
-        if LAST_HEADERS.get('Retry-After') is not None:
+        # LAST_HEADERS is a plain dict, so the case-insensitivity of the live header set is
+        # gone by here: check every spelling rather than one.
+        if any(key.lower() == 'retry-after' for key in LAST_HEADERS):
             note('a Retry-After header appeared, which the client is written not to expect')
 
-    def test_daily_budget_is_not_exhausted(self):
+    def test_daily_budget_is_not_exhausted(self, node):
+        node.location_get({})
         assert not ghl.daily_budget_exhausted(LAST_HEADERS), 'the daily bucket is empty, so nothing else can pass'
 
 

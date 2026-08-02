@@ -51,6 +51,7 @@ from ._base import (
     passthrough,
     require_id,
     schema,
+    total_of,
 )
 
 #: Channels ``message_send`` can originate a message on, verbatim from SendMessageBodyDto.
@@ -183,15 +184,6 @@ def _clean_message(message: Any) -> dict:
     return message if isinstance(message, dict) else {}
 
 
-def _total_of(payload: Any) -> Any:
-    """Total matching records, for the one messages route that reports one.
-
-    ``GET /conversations/messages/export`` declares ``total`` alongside its records. The other
-    two list routes report none, and this returns None rather than a synthesised number there.
-    """
-    return payload.get('total') if isinstance(payload, dict) else None
-
-
 def _next_page_flag(payload: Any) -> Any:
     """``nextPage`` from a message list, or None when the response omits it.
 
@@ -230,7 +222,9 @@ def _cancel_result(payload: Any) -> dict:
     2xx, otherwise a cancellation that did not happen is reported as one that did.
     """
     if not isinstance(payload, dict):
-        return {'ok': True, 'status': None, 'message': ''}
+        # No parsable body means no confirmation. A cancellation that cannot be confirmed is
+        # reported as not done, for the same reason a 4xx inside a 2xx body is.
+        return {'ok': False, 'status': None, 'message': 'GoHighLevel returned no cancellation confirmation.'}
     ok = normalize_success(payload)
     status = payload.get('status')
     try:
@@ -357,7 +351,8 @@ class MessagesMixin(GoHighLevelToolsBase):
         payload, records = self._fetch('GET', '/conversations/messages/export', key='messages', params=params)
         return paginated(
             [_clean_message(record) for record in records],
-            total=_total_of(payload),
+            # GET /conversations/messages/export is the one messages route that declares total.
+            total=total_of(payload),
             next_cursor=next_cursor_of(payload),
             requested_limit=limit,
         )

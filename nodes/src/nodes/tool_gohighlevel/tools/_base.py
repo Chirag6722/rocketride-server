@@ -276,6 +276,25 @@ def params_from(args: dict, keys: Iterable[str]) -> dict:
     return {k: args[k] for k in keys if args.get(k) is not None}
 
 
+def bool_params(args: dict, keys: Iterable[str]) -> dict:
+    """Render the supplied boolean arguments as the lowercase strings the query string needs.
+
+    ``requests`` renders a Python ``True`` into a query string as ``True``, and GoHighLevel
+    validates query parameters strictly enough to answer 422 for a value it does not
+    recognise, so the capitalised form cannot be sent. ``False`` is sent rather than dropped,
+    because dropping it would silently mean "no filter" instead of "only the records where
+    this is false". Anything that is not a real boolean is dropped rather than coerced:
+    guessing at ``"yes"`` would send a filter the agent did not ask for, and Python truthiness
+    would render the string ``"false"`` as ``'true'``.
+    """
+    out: dict = {}
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, bool):
+            out[key] = 'true' if value else 'false'
+    return out
+
+
 def require_id(args: dict, key: str, tool: str) -> str:
     """Read a required record id.
 
@@ -625,7 +644,7 @@ def start_after_cursor(records: Iterable[Any]) -> dict | None:
 
 
 def search_after_cursor(records: Iterable[Any]) -> Any:
-    """Styles B, C and E cursor: the ``searchAfter`` value on the last element of the page.
+    """Styles B and C cursor: the ``searchAfter`` value on the last element of the page.
 
     It sits on the last array element, not on the response root.
     """
@@ -651,6 +670,43 @@ def next_offset(current: Any, limit: int, count: int) -> int | None:
     except (TypeError, ValueError):
         start = 0
     return start + count
+
+
+def total_of(payload: Any) -> Any:
+    """Top-level ``total`` of a response, for the few routes that report one.
+
+    Returns None rather than a synthesised number anywhere it is absent: null means unknown,
+    not zero.
+    """
+    return payload.get('total') if isinstance(payload, dict) else None
+
+
+def follower_result(payload: Any) -> dict:
+    """Followers reported back by a follower write, plus the delta when the API states one."""
+    if not isinstance(payload, dict):
+        return {'followers': []}
+    out: dict = {'followers': payload.get('followers') or []}
+    for key in ('followersAdded', 'followersRemoved'):
+        if key in payload:
+            out[key] = payload[key] or []
+    return out
+
+
+def flag_result(payload: Any) -> dict:
+    """Outcome of a call whose whole answer is a success flag.
+
+    The flag is spelled ``succeded`` (one "e"), ``succeeded`` or ``success`` depending on the
+    endpoint, so it is read through normalize_success rather than by name: reading one
+    spelling would return None on the others, and a successful call would report as a failure.
+    """
+    return {'ok': normalize_success(payload)}
+
+
+def upsert_result(payload: Any, key: str, cleaner) -> dict:
+    """Upsert response: the record under ``key``, plus whether it was created rather than updated."""
+    if not isinstance(payload, dict):
+        return {key: cleaner(payload), 'new': None}
+    return {key: cleaner(payload.get(key)), 'new': payload.get('new')}
 
 
 # ---------------------------------------------------------------------------

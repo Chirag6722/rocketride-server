@@ -38,6 +38,7 @@ from ._base import (
     RECORD_OUTPUT,
     STR,
     GoHighLevelToolsBase,
+    bool_params,
     next_offset,
     params_from,
     record_of,
@@ -75,7 +76,7 @@ _USER_READ_KEYS = _USER_LIST_KEYS + (
 
 #: Query parameters GET /users/search accepts beyond paging and the two ids this node supplies.
 #: ``enabled2waySync`` is absent here because it is a boolean and goes through
-#: :func:`_bool_param` instead.
+#: :func:`bool_params` instead.
 _USER_SEARCH_KEYS = ('query', 'type', 'role', 'ids', 'sort', 'sortDirection')
 
 _USER_RECORD_OUTPUT = RECORD_OUTPUT(
@@ -113,21 +114,6 @@ def _user_total(payload: Any) -> Any:
     if isinstance(payload, dict):
         return payload.get('count')
     return None
-
-
-def _bool_param(args: dict, key: str) -> dict:
-    """Render a boolean query parameter the way GoHighLevel reads it, or {} when it is absent.
-
-    ``requests`` stringifies a Python bool as ``True``/``False``, capitalised, which is not a
-    value any documented GoHighLevel enum accepts and which a lenient parser would read as
-    truthy in both directions. The value is spelled out here instead, and ``False`` is sent
-    rather than dropped, because dropping it would silently mean "no filter" instead of
-    "only the users where this is false".
-    """
-    value = args.get(key)
-    if value is None:
-        return {}
-    return {key: 'true' if value else 'false'}
 
 
 class UsersMixin(GoHighLevelToolsBase):
@@ -206,7 +192,7 @@ class UsersMixin(GoHighLevelToolsBase):
         args = self._args(args, 'user_search')
         params, limit = skip_text_params(args, 'user_search')
         params.update(params_from(args, _USER_SEARCH_KEYS))
-        params.update(_bool_param(args, 'enabled2waySync'))
+        params.update(bool_params(args, ('enabled2waySync',)))
         params['companyId'] = self._company_id(args, 'user_search')
         # Both ids are sent. companyId is required by the endpoint and locationId is the
         # optional narrowing that keeps the result inside the sub-account this node is

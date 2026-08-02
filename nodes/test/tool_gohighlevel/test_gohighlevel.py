@@ -8,23 +8,17 @@ published tool descriptors. No credentials and no network access are needed: thi
 what runs in CI. See test_tools.py for the env-gated live suite.
 
 The framework is stubbed rather than imported, so the node loads without the engine.
-Two stubs are deliberately stricter than the tool_pipedrive originals they were ported
-from, because the loose versions hid real behaviour:
-
-* ``require_int`` there accepted 3.7 and truncated it to 3. The real helper rejects
-  floats outright, so a test written against the loose stub would pass on input the
-  engine refuses.
-* ``normalize_tool_input`` there returned the args dict untouched. The real helper also
-  unwraps a ``{"input": {...}}`` envelope and strips ``security_context``, which is one
-  of the shapes the engine's invoke chain actually delivers, so the loose stub left that
-  delivery path untested.
-
-Both now match ``packages/ai/src/ai/common/utils/tool_args.py`` on the behaviour these
-tests depend on.
+``rocketlib`` and ``ai.common.config`` are hand-written stand-ins because the real ones
+need the native engine, but the argument validators are not:
+``packages/ai/src/ai/common/utils/tool_args.py`` is loaded from its source file, the
+same way the live suite loads it, so the normalisation and integer-validation tests
+below exercise the shipped helpers rather than a copy that stops tracking them the
+moment the real module changes.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 import types
@@ -39,6 +33,11 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src' / 'nodes'))
 
 _STUB_MODULE_NAMES = ('rocketlib', 'ai', 'ai.common', 'ai.common.config', 'ai.common.utils')
+
+#: The real argument validators, loaded from source in _install_stubs.
+_TOOL_ARGS = (
+    Path(__file__).resolve().parents[3] / 'packages' / 'ai' / 'src' / 'ai' / 'common' / 'utils' / 'tool_args.py'
+)
 
 # Obviously fake. A real Private Integration Token is "pit-" plus a UUID, but a literal
 # one here trips secret scanners, so use a placeholder of the same shape class: the
@@ -110,129 +109,15 @@ def _install_stubs() -> None:
     mod_config.Config = Config
     sys.modules['ai.common.config'] = mod_config
 
-    mod_utils = types.ModuleType('ai.common.utils')
-
-    def normalize_tool_input(
-        input_obj,
-        *,
-        extra_envelope_keys=(),
-        strip_keys=('security_context',),
-        parse_json_strings=True,
-        unwrap_pydantic=True,
-        tool_name='tool',
-    ):
-        """Coerce agent-supplied tool input to a plain args dict.
-
-        Ported step for step from the real helper, including the envelope unwrap the
-        tool_pipedrive stub omitted: the engine's invoke chain can deliver
-        ``{"input": {...}, "security_context": ...}``, and a stub that only checked
-        ``isinstance(value, dict)`` let every tool pass that path untested.
-        """
-        if input_obj is None:
-            return {}
-
-        if unwrap_pydantic:
-            model_dump = getattr(input_obj, 'model_dump', None)
-            if callable(model_dump):
-                try:
-                    input_obj = model_dump()
-                except Exception:
-                    mod_rl.warning(f'{tool_name}: model_dump() raised during input normalisation')
-            else:
-                as_dict = getattr(input_obj, 'dict', None)
-                if callable(as_dict):
-                    try:
-                        input_obj = as_dict()
-                    except Exception:
-                        mod_rl.warning(f'{tool_name}: dict() raised during input normalisation')
-
-        if parse_json_strings and isinstance(input_obj, str):
-            try:
-                parsed = json.loads(input_obj)
-            except (json.JSONDecodeError, TypeError):
-                parsed = None
-            if isinstance(parsed, dict):
-                input_obj = parsed
-
-        if not isinstance(input_obj, dict):
-            mod_rl.warning(f'{tool_name}: unexpected input type {type(input_obj).__name__}')
-            return {}
-
-        input_obj = dict(input_obj)
-        for key in ('input', *extra_envelope_keys):
-            wrapped = input_obj.get(key)
-            if isinstance(wrapped, dict):
-                extras = {k: v for k, v in input_obj.items() if k != key}
-                input_obj = {**wrapped, **extras}
-
-        for key in strip_keys:
-            input_obj.pop(key, None)
-        return input_obj
-
-    def require_str(args, key, *, tool_name=''):
-        val = args.get(key)
-        if not isinstance(val, str) or not val.strip():
-            prefix = f'{tool_name}: ' if tool_name else ''
-            raise ValueError(f'{prefix}"{key}" is required and must be a non-empty string')
-        return val.strip()
-
-    def _range_phrase(lo, hi):
-        if lo is not None and hi is not None:
-            return f' between {lo} and {hi}'
-        if lo is not None:
-            return f' >= {lo}'
-        if hi is not None:
-            return f' <= {hi}'
-        return ''
-
-    def require_int(args, key, *, lo=None, hi=None, tool_name=''):
-        """Strict integer read.
-
-        ``bool`` and ``float`` are rejected rather than coerced, which is where the
-        tool_pipedrive stub diverged: it accepted 3.7 and truncated it to 3, so a test
-        could pass on a value the engine refuses.
-        """
-        prefix = f'{tool_name}: ' if tool_name else ''
-        val = args.get(key)
-        if val is None:
-            raise ValueError(f'{prefix}"{key}" is required')
-        if isinstance(val, (bool, float)) or not isinstance(val, (int, str)):
-            raise ValueError(f'{prefix}"{key}" must be an integer{_range_phrase(lo, hi)}')
-        try:
-            out = int(val)
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError(f'{prefix}"{key}" must be an integer{_range_phrase(lo, hi)}')
-        if lo is not None and out < lo:
-            raise ValueError(f'{prefix}"{key}" must be an integer{_range_phrase(lo, hi)}')
-        if hi is not None and out > hi:
-            raise ValueError(f'{prefix}"{key}" must be an integer{_range_phrase(lo, hi)}')
-        return out
-
-    def require_bool(args, key, *, tool_name=''):
-        prefix = f'{tool_name}: ' if tool_name else ''
-        val = args.get(key)
-        if val is None:
-            raise ValueError(f'{prefix}"{key}" is required')
-        if not isinstance(val, bool):
-            raise ValueError(f'{prefix}"{key}" must be a boolean')
-        return val
-
-    def validate_tool_input_schema(input_schema, args, *, tool_name=''):
-        allowed = set((input_schema.get('properties') or {}).keys())
-        unknown = sorted(k for k in args if k not in allowed)
-        if not unknown:
-            return
-        prefix = f'{tool_name}: ' if tool_name else ''
-        if allowed:
-            raise ValueError(f'{prefix}unknown parameter(s) {unknown}. Allowed parameters: {sorted(allowed)}.')
-        raise ValueError(f'{prefix}this tool takes no parameters; received unexpected: {unknown}.')
-
-    mod_utils.normalize_tool_input = normalize_tool_input
-    mod_utils.require_str = require_str
-    mod_utils.require_int = require_int
-    mod_utils.require_bool = require_bool
-    mod_utils.validate_tool_input_schema = validate_tool_input_schema
+    # The real validators, loaded from their source file rather than re-implemented: a
+    # hand-written copy stops tracking the helper the moment it changes, and six tests
+    # below assert on this module's behaviour. Only rocketlib and ai.common.config stay
+    # stubbed, because the real ones need the native engine. rocketlib must already be in
+    # sys.modules here: tool_args imports warning from it.
+    spec = importlib.util.spec_from_file_location('ai.common.utils', _TOOL_ARGS)
+    mod_utils = importlib.util.module_from_spec(spec)
     sys.modules['ai.common.utils'] = mod_utils
+    spec.loader.exec_module(mod_utils)
 
 
 @contextmanager
@@ -250,8 +135,8 @@ def _scoped_stubs() -> Iterator[None]:
 
 
 with _scoped_stubs():
-    from ai.common.utils import normalize_tool_input as stub_normalize_tool_input
-    from ai.common.utils import require_int as stub_require_int
+    from ai.common.utils import normalize_tool_input as real_normalize_tool_input
+    from ai.common.utils import require_int as real_require_int
     from tool_gohighlevel.gohighlevel_client import (
         BASE_URL,
         DEFAULT_VERSION,
@@ -271,6 +156,7 @@ with _scoped_stubs():
         gohighlevel_tool,
         normalize_groups,
     )
+    from tool_gohighlevel.tools import ALL_MIXINS
 
 _CLIENT = 'tool_gohighlevel.gohighlevel_client.requests.request'
 
@@ -1181,6 +1067,21 @@ class TestGroupGating:
         # 101 typed tools plus the raw request escape hatch.
         assert len(published) == 102
 
+    def test_every_registered_mixin_is_an_iinstance_base(self):
+        """ALL_MIXINS and the IInstance inheritance list are maintained by hand in two files.
+
+        The tool count above cannot tell a missing mixin from a miscounted one, so this pins
+        the composition itself: every registered mixin must appear among the IInstance bases,
+        and before IInstanceBase, which has to stay last for the framework hooks to resolve.
+        """
+        bases = IInstance.__bases__
+        missing = [mixin.__name__ for mixin in ALL_MIXINS if mixin not in bases]
+        assert missing == [], f'in ALL_MIXINS but not an IInstance base: {missing}'
+        base_position = {cls: index for index, cls in enumerate(bases)}
+        engine_base = bases[-1]
+        assert engine_base.__name__ == 'IInstanceBase', 'IInstanceBase must be the last base'
+        assert all(base_position[mixin] < base_position[engine_base] for mixin in ALL_MIXINS)
+
     def test_an_unknown_group_name_is_dropped(self):
         assert normalize_groups(['contacts', 'nope']) == frozenset({'contacts'})
         assert normalize_groups('contacts, nope') == frozenset({'contacts'})
@@ -1418,26 +1319,26 @@ class TestArgNormalisation:
         assert mock_request.call_args[0][1] == f'{BASE_URL}/contacts/{RECORD_ID}'
 
     def test_a_top_level_key_beside_the_envelope_wins(self):
-        assert stub_normalize_tool_input({'input': {'a': 1}, 'a': 2}) == {'a': 2}
+        assert real_normalize_tool_input({'input': {'a': 1}, 'a': 2}) == {'a': 2}
 
     def test_security_context_is_stripped_before_the_schema_check(self):
-        assert stub_normalize_tool_input({'contactId': RECORD_ID, 'security_context': {}}) == {'contactId': RECORD_ID}
+        assert real_normalize_tool_input({'contactId': RECORD_ID, 'security_context': {}}) == {'contactId': RECORD_ID}
 
     def test_a_json_string_payload_is_parsed(self):
-        assert stub_normalize_tool_input(json.dumps({'contactId': RECORD_ID})) == {'contactId': RECORD_ID}
+        assert real_normalize_tool_input(json.dumps({'contactId': RECORD_ID})) == {'contactId': RECORD_ID}
 
     @pytest.mark.parametrize('value', [None, 7, [1, 2], 'not json'])
     def test_an_uncoercible_payload_becomes_an_empty_dict(self, value):
-        assert stub_normalize_tool_input(value) == {}
+        assert real_normalize_tool_input(value) == {}
 
     @pytest.mark.parametrize('value', [3.7, True, [1], {'a': 1}, None])
     def test_require_int_rejects_rather_than_coerces(self, value):
         with pytest.raises(ValueError):
-            stub_require_int({'limit': value}, 'limit')
+            real_require_int({'limit': value}, 'limit')
 
     def test_require_int_accepts_an_int_and_a_numeric_string(self):
-        assert stub_require_int({'limit': 3}, 'limit') == 3
-        assert stub_require_int({'limit': '3'}, 'limit') == 3
+        assert real_require_int({'limit': 3}, 'limit') == 3
+        assert real_require_int({'limit': '3'}, 'limit') == 3
 
     def test_an_undeclared_parameter_is_rejected_locally(self):
         """GoHighLevel answers 422 "property X should not exist", which reads as a server fault."""

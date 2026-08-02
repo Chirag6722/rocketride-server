@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..gohighlevel_client import normalize_success, paginated, split_custom_fields
+from ..gohighlevel_client import paginated, split_custom_fields
 from ..tool_groups import gohighlevel_tool
 from ._base import (
     ARR,
@@ -46,6 +46,8 @@ from ._base import (
     STR,
     GoHighLevelToolsBase,
     body_from,
+    flag_result,
+    follower_result,
     next_offset,
     params_from,
     passthrough,
@@ -57,6 +59,7 @@ from ._base import (
     skip_text_params,
     start_after_cursor,
     start_after_params,
+    upsert_result,
 )
 
 #: Fields kept from a contact record. The payload is not enormous, but it carries several
@@ -294,31 +297,9 @@ def _tag_result(payload: Any) -> dict:
     return {'tags': payload.get('tags') or []}
 
 
-def _follower_result(payload: Any) -> dict:
-    """Followers reported back by a follower write, plus the delta when the API states one."""
-    if not isinstance(payload, dict):
-        return {'followers': []}
-    out: dict = {'followers': payload.get('followers') or []}
-    for key in ('followersAdded', 'followersRemoved'):
-        if key in payload:
-            out[key] = payload[key] or []
-    return out
-
-
-def _flag_result(payload: Any) -> dict:
-    """Outcome of a call whose whole answer is a success flag.
-
-    The flag is spelled ``succeded``, ``succeeded`` or ``success`` depending on the endpoint,
-    so it is read through normalize_success rather than by name.
-    """
-    return {'ok': normalize_success(payload)}
-
-
 def _upsert_result(payload: Any) -> dict:
     """Upsert response: the contact, plus whether it was created rather than updated."""
-    if not isinstance(payload, dict):
-        return {'contact': _clean_contact(payload), 'new': None}
-    return {'contact': _clean_contact(payload.get('contact')), 'new': payload.get('new')}
+    return upsert_result(payload, 'contact', _clean_contact)
 
 
 class ContactsMixin(GoHighLevelToolsBase):
@@ -640,7 +621,7 @@ class ContactsMixin(GoHighLevelToolsBase):
         args = self._args(args, 'contact_followers_add')
         contact_id = require_id(args, 'contactId', 'contact_followers_add')
         body = body_from(args, ('followers',))
-        return self._write('POST', f'/contacts/{contact_id}/followers', _follower_result, body=body)
+        return self._write('POST', f'/contacts/{contact_id}/followers', follower_result, body=body)
 
     @gohighlevel_tool(
         group='contacts',
@@ -660,7 +641,7 @@ class ContactsMixin(GoHighLevelToolsBase):
         args = self._args(args, 'contact_followers_remove')
         contact_id = require_id(args, 'contactId', 'contact_followers_remove')
         body = body_from(args, ('followers',))
-        return self._write('DELETE', f'/contacts/{contact_id}/followers', _follower_result, body=body)
+        return self._write('DELETE', f'/contacts/{contact_id}/followers', follower_result, body=body)
 
     # -- workflows ---------------------------------------------------------
 
@@ -687,7 +668,7 @@ class ContactsMixin(GoHighLevelToolsBase):
         contact_id = require_id(args, 'contactId', 'contact_workflow_add')
         workflow_id = require_id(args, 'workflowId', 'contact_workflow_add')
         body = body_from(args, ('eventStartTime',))
-        return self._write('POST', f'/contacts/{contact_id}/workflow/{workflow_id}', _flag_result, body=body)
+        return self._write('POST', f'/contacts/{contact_id}/workflow/{workflow_id}', flag_result, body=body)
 
     @gohighlevel_tool(
         group='contacts',
@@ -708,7 +689,7 @@ class ContactsMixin(GoHighLevelToolsBase):
         contact_id = require_id(args, 'contactId', 'contact_workflow_remove')
         workflow_id = require_id(args, 'workflowId', 'contact_workflow_remove')
         # This DELETE declares a required JSON body, so an empty object is sent rather than nothing.
-        return self._write('DELETE', f'/contacts/{contact_id}/workflow/{workflow_id}', _flag_result, body={})
+        return self._write('DELETE', f'/contacts/{contact_id}/workflow/{workflow_id}', flag_result, body={})
 
     # -- related records ---------------------------------------------------
 

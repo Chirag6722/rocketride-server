@@ -46,6 +46,7 @@ from ._base import (
     require_id,
     schema,
     start_after_date_params,
+    total_of,
 )
 
 #: Message-type values a conversation's last message can carry, verbatim from the
@@ -163,15 +164,6 @@ def _clean_conversation(conversation: Any) -> dict:
     return conversation if isinstance(conversation, dict) else {}
 
 
-def _total_of(payload: Any) -> Any:
-    """Total matching records, for the one conversations route that reports one.
-
-    ``GET /conversations/search`` is live-confirmed to send ``total`` beside ``conversations``.
-    Returns None rather than a synthesised number anywhere it is absent.
-    """
-    return payload.get('total') if isinstance(payload, dict) else None
-
-
 def _search_cursor(records: Any, sort_by: Any) -> Any:
     """Style I cursor: the sort value carried by the last conversation of a page.
 
@@ -249,7 +241,8 @@ class ConversationsMixin(GoHighLevelToolsBase):
         payload, records = self._fetch('GET', '/conversations/search', key='conversations', params=params)
         return paginated(
             [_clean_conversation(record) for record in records],
-            total=_total_of(payload),
+            # GET /conversations/search is live-confirmed to send total beside conversations.
+            total=total_of(payload),
             next_cursor=_search_cursor(records, args.get('sortBy')),
             requested_limit=limit,
         )
