@@ -77,7 +77,7 @@ The same portable `.pipe` file runs against either deployment:
 - **Self-hosted** (free, MIT): Docker, on-prem, or a local process in your IDE. Point the client at your own engine, e.g. `ws://localhost:5565`.
 - **[RocketRide Cloud](https://cloud.rocketride.ai/)**: managed hosting at `https://api.rocketride.ai`, if you would rather not run an engine yourself.
 
-<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/canvas.png" alt="RocketRide visual canvas builder" width="800">
+<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/vscode-extension.png" alt="RocketRide extension in Visual Studio Code" width="800">
 
 ## Features
 

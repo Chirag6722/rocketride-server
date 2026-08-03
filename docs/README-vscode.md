@@ -21,7 +21,7 @@
 4. Create a `.pipe` file: it opens automatically in the visual canvas builder
 5. Wire up nodes by connecting input and output lanes, then hit **Play** to run
 
-<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/canvas.png" alt="RocketRide visual canvas builder" width="800">
+<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/vscode-extension.png" alt="RocketRide extension in Visual Studio Code" width="800">
 
 > **Linux users:** the downloaded engine is dynamically linked against the system C++ runtime. On Ubuntu/Debian, install once:
 >
@@ -44,8 +44,6 @@
 
 - **Visual canvas builder**: drag, drop, and wire up AI workflows directly in VS Code. Create `.pipe` files to get started.
 - **Debugging & live traces**: monitor running pipelines in real time with execution traces, token usage, and memory stats. See exactly what your agents are doing at every step.
-
-<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/trace.png" alt="RocketRide debugging and live traces" width="800">
 
 - **Connection manager**: connect to a local engine, Docker container, system service, on-premises server, or RocketRide Cloud. Separate development and deployment targets let you build locally and deploy to a different environment.
 - **Server Monitor**: real-time dashboard of connections, running tasks, and aggregate engine metrics.

@@ -78,7 +78,7 @@ There are two ways to run the engine your client connects to:
 
 The same `.pipe` file runs unchanged on both.
 
-<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/canvas.png" alt="RocketRide visual canvas builder" width="800">
+<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/vscode-extension.png" alt="RocketRide extension in Visual Studio Code" width="800">
 
 ## Features
 
