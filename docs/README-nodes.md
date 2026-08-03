@@ -108,7 +108,7 @@ channel; they have no data lanes and **bind to an agent** (see
 | `tool_exa_search`   | Exa semantic web search                                          |
 | `tool_firecrawl`    | Firecrawl web-scraping operations                                |
 | `tool_http_request` | Arbitrary HTTP requests, "curl for agents"                      |
-| `tool_github`       | GitHub repository operations                                     |
+| `tool_github`       | GitHub: files, issues, PRs, reviews, releases, workflows, search, plus a raw REST escape hatch |
 | `tool_pipedrive`    | Pipedrive CRM operations: deals, persons, organizations, activities, and the rest of API v1 |
 | `tool_git`          | Local Git repository operations                                  |
 | `tool_filesystem`   | File-system access                                               |

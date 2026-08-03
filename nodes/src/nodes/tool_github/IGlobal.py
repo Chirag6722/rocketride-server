@@ -26,13 +26,16 @@
 """
 GitHub tool node - global (shared) state.
 
-Reads token, default_repo, and read_only flag from config.
+Reads the token, the default repo, the read-only flag, the published tool groups
+and the raw-request switch from config.
 """
 
 from __future__ import annotations
 
 from ai.common.config import Config
 from rocketlib import IGlobalBase, OPEN_MODE, warning
+
+from .tool_groups import DEFAULT_GROUPS, normalize_groups, unknown_groups
 
 
 class IGlobal(IGlobalBase):
@@ -41,6 +44,8 @@ class IGlobal(IGlobalBase):
     token: str = ''
     default_repo: str = ''
     read_only: bool = False
+    tool_groups: frozenset = DEFAULT_GROUPS
+    allow_raw_request: bool = True
 
     def beginGlobal(self) -> None:
         if self.IEndpoint.endpoint.openMode == OPEN_MODE.CONFIG:
@@ -50,6 +55,8 @@ class IGlobal(IGlobalBase):
         self.token = str((cfg.get('token') or '')).strip()
         self.default_repo = str((cfg.get('defaultRepo') or '')).strip()
         self.read_only = bool(cfg.get('readOnly', False))
+        self.tool_groups = normalize_groups(cfg.get('toolGroups'))
+        self.allow_raw_request = bool(cfg.get('allowRawRequest', True))
 
         if not self.token:
             raise Exception('tool_github: token is required')
@@ -59,10 +66,19 @@ class IGlobal(IGlobalBase):
             cfg = Config.getNodeConfig(self.glb.logicalType, self.glb.connConfig)
             if not str((cfg.get('token') or '')).strip():
                 warning('token is required')
+            unknown = unknown_groups(cfg.get('toolGroups'))
+            if unknown:
+                warning(f'unknown tool group(s): {", ".join(unknown)}')
         except Exception as e:
             warning(str(e))
+
+    # No oversized-published-set warning here, unlike tool_pipedrive. That node can publish
+    # 255 tools against a recommended ceiling of 120; this one tops out at 37 plus the raw
+    # request tool, so the check could never fire.
 
     def endGlobal(self) -> None:
         self.token = ''
         self.default_repo = ''
         self.read_only = False
+        self.tool_groups = DEFAULT_GROUPS
+        self.allow_raw_request = True

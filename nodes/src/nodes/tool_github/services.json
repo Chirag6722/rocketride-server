@@ -9,7 +9,7 @@
 	"prefix": "github",
 	"icon": "github.svg",
 	"documentation": "https://docs.rocketride.org",
-	"description": ["Exposes GitHub repository operations as agent tools.", "Covers files, issues, pull requests, reviews, releases, workflows, orgs, users,", "code search, and commit history."],
+	"description": ["Exposes GitHub repository operations as agent tools.", "Covers files, issues, pull requests, reviews, releases, workflows, orgs, users,", "code search, and commit history, plus a generic request tool that reaches any", "other GitHub REST endpoint."],
 	"tile": ["GitHub${parameters.github.defaultRepo ? ': ' + parameters.github.defaultRepo : ''}"],
 	"lanes": {},
 	"preconfig": {
@@ -19,7 +19,9 @@
 				"title": "GitHub",
 				"token": "",
 				"defaultRepo": "",
-				"readOnly": false
+				"readOnly": false,
+				"toolGroups": [],
+				"allowRawRequest": true
 			}
 		}
 	},
@@ -44,11 +46,32 @@
 		"github.readOnly": {
 			"type": "boolean",
 			"title": "Read-only mode",
-			"description": "When enabled, all write operations (file create/edit/delete, issue create, PR create, etc.) are blocked. Safe for agents that should only read.",
+			"description": "When enabled, every create, edit and delete tool is <b>hidden from the agent</b> rather than merely refused, and the generic request tool only accepts GET. An agent cannot tell in advance that a published tool is blocked, so hiding saves it a wasted turn. Safe for agents that should only inspect repositories.",
 			"default": false,
 			"enum": [
 				[true, "Yes: read only"],
 				[false, "No: allow writes"]
+			]
+		},
+		"github.toolGroups": {
+			"type": "array",
+			"title": "Tool groups",
+			"description": "Which groups of GitHub tools this node publishes to the agent. <b>Leave this empty to publish all 37 tools</b>, which is the default and what this node has always done. Name groups to narrow the agent to one job: for example <code>issues, search, repos</code> gives a 13-tool issue-triage agent. Available groups: files (5), issues (6), org_members (1), pull_requests (7), releases (5), repos (5), search (2), workflows (6). Use <b>all</b> as an explicit way to say everything. Names are matched case-insensitively, and a name this node does not implement is reported as a warning and otherwise ignored.",
+			"items": {
+				"type": "string",
+				"enum": ["files", "issues", "org_members", "pull_requests", "releases", "repos", "search", "workflows", "all"]
+			},
+			"default": [],
+			"optional": true
+		},
+		"github.allowRawRequest": {
+			"type": "boolean",
+			"title": "Allow raw API requests",
+			"description": "Publishes the generic <b>request</b> tool, which can call any GitHub REST endpoint by method and path: branches, tags, labels, milestones, gists, projects, teams, deployments, check runs, branch protection and everything else the typed tools do not model. It uses the same authentication, rate-limit handling and read-only enforcement as the typed tools, but it is <b>not</b> restricted by Tool groups, so it reaches anything the configured token is scoped for. Disable to restrict the agent to the typed tools only.",
+			"default": true,
+			"enum": [
+				[true, "Yes: expose the request tool"],
+				[false, "No: typed tools only"]
 			]
 		}
 	},
@@ -56,7 +79,7 @@
 		{
 			"section": "Pipe",
 			"title": "GitHub",
-			"properties": ["type", "github.token", "github.defaultRepo", "github.readOnly"]
+			"properties": ["type", "github.token", "github.defaultRepo", "github.readOnly", "github.toolGroups", "github.allowRawRequest"]
 		}
 	]
 }

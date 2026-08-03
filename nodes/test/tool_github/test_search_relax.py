@@ -60,7 +60,14 @@ def _build_import_stubs():
 
 # Import nodes.tool_github.IInstance under controlled stubs, then restore
 # sys.modules exactly (same isolation discipline as test_tool_deepl.py).
-_GH_MODULES = ('nodes.tool_github.IInstance', 'nodes.tool_github.IGlobal', 'nodes.tool_github')
+_GH_MODULES = (
+    'nodes.tool_github.IInstance',
+    'nodes.tool_github.IGlobal',
+    # Imported by both of the above, so it has to be popped and restored with them or it
+    # retains a reference to the stubbed rocketlib after this module finishes importing.
+    'nodes.tool_github.tool_groups',
+    'nodes.tool_github',
+)
 _stubs = _build_import_stubs()
 _touched = list(_stubs) + list(_GH_MODULES)
 _ABSENT = object()

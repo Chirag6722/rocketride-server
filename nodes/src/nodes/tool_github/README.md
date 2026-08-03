@@ -15,8 +15,11 @@ responses are stripped of noisy fields (`node_id`, `_links`, gravatar data, etc.
 agent gets compact, useful output.
 
 A personal access token is **required**: the pipeline fails to start without one. Write
-operations are **allowed by default**; enable **read-only mode** to block every mutating
+operations are **allowed by default**; enable **read-only mode** to hide every mutating
 tool when the agent should only inspect.
+
+Beyond the typed tools, a generic `request` tool reaches any other GitHub REST endpoint,
+so an agent is not limited to the operations wired up here.
 
 ---
 
@@ -27,8 +30,52 @@ tool when the agent should only inspect.
 |---|---|---|
 | `token` | string | Default empty. GitHub PAT with repo, issues, pull_requests, and workflows scopes. Use a fine-grained token scoped to only the repos you need. |
 | `defaultRepo` | string | Default empty. Default repo in owner/repo format (e.g. acme/myapp). Tool calls that omit the repo parameter will use this value. |
-| `readOnly` | boolean | Default false. When enabled, all write operations (file create/edit/delete, issue create, PR create, etc.) are blocked. Safe for agents that should only read. |
+| `readOnly` | boolean | Default false. When enabled, every create, edit and delete tool is hidden from the agent rather than merely refused, and the generic request tool only accepts GET. |
+| `toolGroups` | array | Default empty, which publishes all 37 tools. Name groups to narrow the agent. See [Tool groups](#tool-groups). |
+| `allowRawRequest` | boolean | Default true. Publishes the generic `request` tool, which reaches any GitHub REST endpoint. Not restricted by `toolGroups`. |
 
+
+### Tool groups
+
+`toolGroups` selects which groups reach the agent. **Leave it empty to publish all 37
+tools**, which is the default and what this node has always done, so upgrading changes
+nothing until the field is set.
+
+| Group | Tools | Contents |
+|---|---|---|
+| `files` | 5 | File contents: read, list, create, edit, delete |
+| `issues` | 6 | Issues, comments, labels, lock |
+| `pull_requests` | 7 | Pull requests and their reviews |
+| `repos` | 5 | Repository metadata, commits, repository listings (all read-only) |
+| `releases` | 5 | Releases |
+| `workflows` | 6 | GitHub Actions workflows |
+| `search` | 2 | Code and issue search |
+| `org_members` | 1 | Organization invitations |
+
+Narrow it to give an agent one job. An issue-triage agent needs 13 tools:
+
+```json
+{ "toolGroups": ["issues", "search", "repos"] }
+```
+
+`all` is an explicit way to say everything. Names are matched case-insensitively, and a
+name this node does not implement is reported as a warning in the editor and otherwise
+ignored. The `request` tool is gated by `allowRawRequest` instead, not by this field.
+
+### Rate limits and retries
+
+The client reads GitHub's own headers rather than guessing. A `429`, and a `403` that is
+demonstrably a rate limit, are retried up to 3 attempts, waiting for whatever
+`retry-after` or `x-ratelimit-reset` asks for.
+
+A `403` that names a permission, SSO or scope problem is **never** retried: it is
+permanent, and retrying would burn budget while hiding the real error.
+
+No single wait exceeds 60 seconds and no call sleeps more than 90 seconds in total. The
+core rate limit resets hourly, so when the required wait is longer than the cap the call
+fails immediately with the reset time in its message rather than holding a pipeline thread
+for the best part of an hour. Failures on `5xx` and on network errors are retried for GET
+only, since a write may already have applied.
 
 ### Repository resolution
 
@@ -43,150 +90,145 @@ Most tools accept an optional `repo` parameter (`owner/repo`). If omitted, the c
 
 ## Available tools
 
-List tools accept `per_page` (1–100, default 30) and `page` (default 1) for pagination.
+37 typed tools across 8 groups, plus the generic `request` escape hatch. Which groups are
+published is controlled by `toolGroups`; the **Writes** column marks the tools that are
+hidden when `readOnly` is on. List tools accept `per_page` (1-100, default 30) and `page`
+(default 1).
 
-### Files
+### `files` (5 tools)
 
-
-| Tool | Description |
+| Tool | Writes | Description |
 |---|---|---|
-| `file_get` | Get the decoded content and metadata of a single file from a GitHub repository. |
-| `file_list` | List files and directories at a path in a GitHub repository. |
-| `file_create` | Create a new file in a GitHub repository. |
-| `file_edit` | Update an existing file in a GitHub repository. Requires the current file SHA (get it from file_get first). |
-| `file_delete` | Delete a file from a GitHub repository. Requires the current file SHA (get it from file_get first). |
-| `issue_get` | Get a single GitHub issue by number. |
-| `issue_list` | List issues in a repository. Excludes pull requests. |
-| `issue_create` | Create a new issue in a GitHub repository. |
-| `issue_comment` | Post a comment on a GitHub issue. |
-| `issue_edit` | Edit an existing GitHub issue (title, body, state, labels, assignees). |
-| `issue_lock` | Lock a GitHub issue to prevent further comments. |
-| `pr_get` | Get a single pull request by number. |
-| `pr_list` | List pull requests in a repository. |
-| `pr_create` | Create a new pull request. |
-| `review_create` | Submit a review on a pull request (approve, request changes, or comment). |
-| `review_list` | List all reviews on a pull request. |
-| `review_get` | Get a single review on a pull request. |
-| `review_update` | Update the body of a pending review on a pull request. |
-| `repo_get` | Get metadata for a GitHub repository (stars, forks, language, default branch, etc.). |
-| `release_list` | List releases for a repository. |
-| `release_get` | Get a single release by ID. |
-| `release_create` | Create a new release in a repository. |
-| `release_update` | Update an existing release. |
-| `release_delete` | Delete a release from a repository. |
-| `workflow_list` | List all workflows in a repository. |
-| `workflow_get` | Get a single workflow by ID or filename. |
-| `workflow_dispatch` | Trigger a workflow_dispatch event to manually run a workflow. |
-| `workflow_enable` | Enable a previously disabled workflow. |
-| `workflow_disable` | Disable a workflow so it will not run. |
-| `workflow_get_usage` | Get billable minutes and run counts for a workflow. |
-| `org_list_repos` | List repositories belonging to a GitHub organization. |
-| `user_get_repos` | List repositories for a user. Omit username to list the authenticated user's repos. |
-| `user_invite` | Invite a user to a GitHub organization by email. |
-| `search_code` | Search code across GitHub repositories. Returns matching file paths, repo, and a snippet. |
-| `search_issues` | Search issues and pull requests across GitHub. Useful for finding bug reports and edge cases related to a node. |
-| `commit_list` | List commits in a repository, optionally filtered to a specific file path. Useful for understanding what changed recently. |
-| `commit_get` | Get a single commit including its diff stats and changed files. |
+| `file_get` | | Get a file's decoded content and metadata. Returns `found: false` on a 404 instead of failing. |
+| `file_list` | | List files and directories at a path. |
+| `file_create` | yes | Create a new file. |
+| `file_edit` | yes | Update an existing file. Requires the current blob SHA from `file_get`. |
+| `file_delete` | yes | Delete a file. Requires the current blob SHA from `file_get`. |
 
+`file_get` raises when the path is a directory (use `file_list`), and `file_list` raises
+when the path is a file (use `file_get`). Reads accept an optional `ref` (branch, tag or
+commit SHA); writes accept an optional `branch` and a commit `message`.
 
-`file_get` raises an error when the path is a directory (use `file_list`), and
-`file_list` raises when the path is a file (use `file_get`). Reads accept an optional
-`ref` (branch, tag, or commit SHA); writes accept an optional `branch` and commit
-`message`.
+### `issues` (6 tools)
 
-### Issues
+| Tool | Writes | Description |
+|---|---|---|
+| `issue_get` | | Get a single issue by number. |
+| `issue_list` | | List issues in a repository. |
+| `issue_create` | yes | Create an issue. |
+| `issue_comment` | yes | Post a comment on an issue. |
+| `issue_edit` | yes | Edit title, body, state, labels or assignees. |
+| `issue_lock` | yes | Lock an issue, optionally with a reason. |
 
-| Tool            | Description                                              |
-|-----------------|----------------------------------------------------------|
-| `issue_get`     | Get a single issue by number                             |
-| `issue_list`    | List issues (filter by state, labels, assignee)          |
-| `issue_create`  | Create a new issue (title, body, labels, assignees)      |
-| `issue_comment` | Post a comment on an issue                               |
-| `issue_edit`    | Edit an issue (title, body, state, labels, assignees)    |
-| `issue_lock`    | Lock an issue to prevent further comments                |
+GitHub returns pull requests from its issues endpoints; both `issue_get` and `issue_list`
+filter them out, so use the `pull_requests` group for those.
 
-GitHub's issues endpoint includes pull requests; `issue_list` filters them out, and
-`issue_get` raises an error for PR numbers (use `pr_get`).
+### `pull_requests` (7 tools)
 
-### Pull requests
+| Tool | Writes | Description |
+|---|---|---|
+| `pr_get` | | Get a single pull request by number. |
+| `pr_list` | | List pull requests. |
+| `pr_create` | yes | Open a pull request. |
+| `review_get` | | Get a single review. |
+| `review_list` | | List the reviews on a pull request. |
+| `review_create` | yes | Submit an APPROVE, REQUEST_CHANGES or COMMENT review. |
+| `review_update` | yes | Update the body of a pending review. |
 
-| Tool        | Description                                                  |
-|-------------|--------------------------------------------------------------|
-| `pr_get`    | Get a single pull request by number                          |
-| `pr_list`   | List pull requests (filter by state, base branch)            |
-| `pr_create` | Create a pull request (title, head, base, body, draft flag)  |
+Reviews live here rather than in a group of their own: a review exists only on a pull
+request, so an agent given PRs without reviews could open one and never read the feedback.
 
-### Reviews
+### `repos` (5 tools)
 
-| Tool            | Description                                                       |
-|-----------------|-------------------------------------------------------------------|
-| `review_create` | Submit a PR review: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`  |
-| `review_list`   | List all reviews on a pull request                                |
-| `review_get`    | Get a single review                                               |
-| `review_update` | Update the body of a pending review                               |
+| Tool | Writes | Description |
+|---|---|---|
+| `repo_get` | | Get repository metadata. |
+| `commit_list` | | List commits, optionally filtered to a file path. |
+| `commit_get` | | Get a commit with diff stats and per-file patches. |
+| `org_list_repos` | | List an organization's repositories. |
+| `user_get_repos` | | List a user's repositories, or the authenticated user's when no username is given. |
 
-### Repository
+All read-only: this group answers "what repositories exist and what has happened in them".
 
-| Tool       | Description                                                            |
-|------------|------------------------------------------------------------------------|
-| `repo_get` | Repository metadata (stars, forks, language, default branch, etc.)     |
+### `releases` (5 tools)
 
-### Releases
+| Tool | Writes | Description |
+|---|---|---|
+| `release_list` | | List releases. |
+| `release_get` | | Get a release by id. |
+| `release_create` | yes | Create a release. |
+| `release_update` | yes | Update a release. |
+| `release_delete` | yes | Delete a release. |
 
-| Tool             | Description                                              |
-|------------------|----------------------------------------------------------|
-| `release_list`   | List releases                                            |
-| `release_get`    | Get a single release by ID                               |
-| `release_create` | Create a release (tag, title, notes, draft/prerelease)   |
-| `release_update` | Update an existing release                               |
-| `release_delete` | Delete a release                                         |
+### `workflows` (6 tools)
 
-### Workflows
+| Tool | Writes | Description |
+|---|---|---|
+| `workflow_list` | | List GitHub Actions workflows. |
+| `workflow_get` | | Get a workflow by id or filename. |
+| `workflow_get_usage` | | Billable minutes for a workflow. |
+| `workflow_dispatch` | yes | Trigger a `workflow_dispatch` event. |
+| `workflow_enable` | yes | Enable a workflow. |
+| `workflow_disable` | yes | Disable a workflow. |
 
-| Tool                 | Description                                            |
-|----------------------|--------------------------------------------------------|
-| `workflow_list`      | List workflows in a repository                         |
-| `workflow_get`       | Get a single workflow by ID or filename (e.g. `ci.yml`) |
-| `workflow_dispatch`  | Trigger a `workflow_dispatch` event on a branch or tag, with optional inputs |
-| `workflow_enable`    | Enable a previously disabled workflow                  |
-| `workflow_disable`   | Disable a workflow so it will not run                  |
-| `workflow_get_usage` | Billable minutes and run counts for a workflow         |
+### `search` (2 tools)
 
-### Organization & users
+| Tool | Writes | Description |
+|---|---|---|
+| `search_code` | | Search code. Supports GitHub code-search syntax, e.g. `transport extension:py`. |
+| `search_issues` | | Search issues and pull requests, with an optional `state` filter. |
 
-| Tool             | Description                                                            |
-|------------------|------------------------------------------------------------------------|
-| `org_list_repos` | List repos in an organization (filter by type)                         |
-| `user_get_repos` | List repos for a user, omit `username` for the authenticated user     |
-| `user_invite`    | Invite a user to an organization by email (role: `admin` · `direct_member` · `billing_manager`) |
+Both fall back to `defaultRepo` when one is configured. A query that returns nothing is
+retried once as an OR of its keywords, so a multi-word question still finds something.
 
-### Search & commits
+### `org_members` (1 tool)
 
-| Tool            | Description                                                          |
-|-----------------|----------------------------------------------------------------------|
-| `search_code`   | Search code, supports GitHub code search syntax (e.g. `mcp_client transport extension:py`) |
-| `search_issues` | Search issues and PRs, supports GitHub issue search syntax, optional `state` filter |
-| `commit_list`   | List commits, optionally filtered to a file path or starting ref     |
-| `commit_get`    | Get a single commit with diff stats and per-file patches             |
+| Tool | Writes | Description |
+|---|---|---|
+| `user_invite` | yes | Invite a user to an organization by email. |
+
+A single-tool group on purpose. This is the only tool whose blast radius is organization
+membership rather than a repository, and it needs `admin:org` on the token, so it is
+exactly the one an operator may want to switch off on its own.
+
+### `request` (1 tool, gated by `allowRawRequest`)
+
+| Tool | Writes | Description |
+|---|---|---|
+| `request` | for any non-GET method | Call any GitHub REST endpoint by method and path. |
+
+The escape hatch for everything the typed tools do not model: branches, tags, labels,
+milestones, gists, projects, teams, deployments, check runs, packages, branch protection
+and the rest. It takes `method` and `path` plus optional `params` and `body`, and returns
+the raw response body rather than a cleaned projection.
+
+It is **not** filtered by `toolGroups`, so it reaches anything the token is scoped for. It
+is still subject to `readOnly`, where it accepts GET only. Paths must start with `/` and
+must not carry a query string; pass query parameters in `params`.
+
+```json
+{ "method": "GET", "path": "/repos/acme/app/branches/main/protection" }
+```
 
 ---
 
 ## Read-only mode
 
-When `readOnly` is `true`, every mutating tool is blocked at dispatch and returns an
-error. This is the recommended setting when the agent only needs to inspect repositories.
+When `readOnly` is `true`, the 17 mutating tools are **hidden from the agent** rather than
+merely refused. They do not appear in the published tool list at all, so the agent never
+sees a tool it can only fail on, and calling one anyway is still rejected.
 
-Blocked tools: `file_create`, `file_edit`, `file_delete`, `issue_create`,
-`issue_comment`, `issue_edit`, `issue_lock`, `pr_create`, `review_create`,
-`review_update`, `release_create`, `release_update`, `release_delete`,
-`workflow_dispatch`, `workflow_enable`, `workflow_disable`, `user_invite`.
+This is a change from earlier behaviour, where every tool stayed visible and a write was
+refused only once it had been attempted. An agent cannot tell in advance that a published
+tool is blocked, so it spent a turn finding out, and 17 unusable tools is 17 tools' worth
+of wasted context.
 
-Always allowed: `file_get`, `file_list`, `issue_get`, `issue_list`, `pr_get`, `pr_list`,
-`review_list`, `review_get`, `repo_get`, `release_list`, `release_get`, `workflow_list`,
-`workflow_get`, `workflow_get_usage`, `org_list_repos`, `user_get_repos`, `search_code`,
-`search_issues`, `commit_list`, `commit_get`.
+The `request` tool stays published in read-only mode, because it is still a working read
+tool there. It accepts GET and refuses every other method.
 
-Note the default is `false`, a freshly added node can write. Turn read-only mode on
+Which tools count as writes is marked in the **Writes** column of each group table above.
+
+Note the default is `false`: a freshly added node can write. Turn read-only mode on
 explicitly for inspect-only agents.
 
 ---
@@ -208,6 +250,9 @@ Upstream reference: [GitHub REST API documentation](https://docs.github.com/en/r
 ## Running the tests
 
 ```bash
+# Stubbed suite: no credentials, no network
+pytest nodes/test/tool_github/ -v
+
 # Integration tests against a real repository (skipped unless both vars are set)
 export GITHUB_TOKEN=<your token>
 export GITHUB_TEST_REPO=owner/repo
@@ -223,13 +268,16 @@ pytest nodes/test/tool_github/test_tools.py -v
 
 | Field | Type | Description | Default |
 |---|---|---|---|
+| `github.allowRawRequest` | `boolean` | **Allow raw API requests**<br/>Publishes the generic <b>request</b> tool, which can call any GitHub REST endpoint by method and path: branches, tags, labels, milestones, gists, projects, teams, deployments, check runs, branch protection and everything else the typed tools do not model. It uses the same authentication, rate-limit handling and read-only enforcement as the typed tools, but it is <b>not</b> restricted by Tool groups, so it reaches anything the configured token is scoped for. Disable to restrict the agent to the typed tools only. | `true` |
 | `github.defaultRepo` | `string` | **Default Repository**<br/>Default repo in owner/repo format (e.g. acme/myapp). Tool calls that omit the repo parameter will use this value. | `""` |
-| `github.readOnly` | `boolean` | **Read-only mode**<br/>When enabled, all write operations (file create/edit/delete, issue create, PR create, etc.) are blocked. Safe for agents that should only read. | `false` |
+| `github.readOnly` | `boolean` | **Read-only mode**<br/>When enabled, every create, edit and delete tool is <b>hidden from the agent</b> rather than merely refused, and the generic request tool only accepts GET. An agent cannot tell in advance that a published tool is blocked, so hiding saves it a wasted turn. Safe for agents that should only inspect repositories. | `false` |
 | `github.token` | `string` | **Personal Access Token**<br/>GitHub PAT with repo, issues, pull_requests, and workflows scopes. Use a fine-grained token scoped to only the repos you need. | `""` |
+| `github.toolGroups` | `array` | **Tool groups**<br/>Which groups of GitHub tools this node publishes to the agent. <b>Leave this empty to publish all 37 tools</b>, which is the default and what this node has always done. Name groups to narrow the agent to one job: for example <code>issues, search, repos</code> gives a 13-tool issue-triage agent. Available groups: files (5), issues (6), org_members (1), pull_requests (7), releases (5), repos (5), search (2), workflows (6). Use <b>all</b> as an explicit way to say everything. Names are matched case-insensitively, and a name this node does not implement is reported as a warning and otherwise ignored. | `[]` |
 
 ## Dependencies
 
 - `requests` `>=2.34.2`
+- `tenacity`
 
 ## Source
 

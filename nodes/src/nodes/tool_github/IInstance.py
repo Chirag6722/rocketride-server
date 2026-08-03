@@ -27,13 +27,21 @@
 GitHub tool node instance.
 
 Exposes GitHub repository operations as agent tools: files, issues, pull
-requests, reviews, releases, workflows, orgs, users, and code search.
+requests, reviews, releases, workflows, orgs, users, and code search, plus a
+generic ``request`` tool that reaches any REST endpoint the typed tools do not
+model.
+
+Publication is filtered twice, in one pass, by ``_collect_tool_methods``. The
+group stamp decides which resource areas an agent sees at all, and the write
+stamp removes the tools a read-only node could never run. Both are stamped by
+``@github_tool``, so there is no registry to keep in sync with the definitions.
 """
 
 from __future__ import annotations
 
 import base64
 import re
+from typing import Callable
 
 from rocketlib import IInstanceBase, tool_function
 
@@ -49,8 +57,11 @@ from .github_client import (
     clean_repo,
     clean_user,
     clean_workflow,
+    redact_payload,
+    redact_text,
 )
 from .IGlobal import IGlobal
+from .tool_groups import RAW_REQUEST_TOOL, github_tool
 
 # ---------------------------------------------------------------------------
 # Shared parameter descriptions
@@ -159,6 +170,14 @@ def _relax_query(q: str, *, max_terms: int = 5) -> str | None:
     return ' '.join([or_clause, *qualifiers]).strip()
 
 
+#: Methods the ``request`` tool accepts without write permission.
+_SAFE_METHODS = {'GET'}
+
+#: HEAD is deliberately absent even though ``github_client`` handles it: GitHub documents no
+#: HEAD-only surface, so offering it in the enum would promise something nothing exercises.
+_ALLOWED_METHODS = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
+
+
 class IInstance(IInstanceBase):
     IGlobal: IGlobal
 
@@ -179,11 +198,53 @@ class IInstance(IInstanceBase):
         if self.IGlobal.read_only:
             raise ValueError('This operation is not permitted: the node is configured in read-only mode')
 
+    # -----------------------------------------------------------------------
+    # Tool publication
+    # -----------------------------------------------------------------------
+
+    def _collect_tool_methods(self) -> dict[str, Callable]:
+        """Publish only the tools this node's configuration allows an agent to run.
+
+        The base implementation returns every ``@tool_function`` on the class. Two filters
+        run here, and both cover ``tool.query`` (the agent never sees the tool) as well as
+        ``tool.invoke`` (calling it anyway is refused), because the engine builds both from
+        this one map:
+
+        1. The resource group, against ``github.toolGroups``.
+        2. The write stamp, when ``github.readOnly`` is on. Hiding beats refusing: an agent
+           cannot tell in advance that a published tool is blocked, so it spends a turn
+           finding out, and 17 tools it can only ever fail on are 17 tools' worth of wasted
+           context. ``_require_write`` still guards invoke as defence in depth, and because
+           the raw ``request`` tool carries no stamp at all.
+        """
+        methods = super()._collect_tool_methods()
+        enabled = self.IGlobal.tool_groups
+        allow_raw = self.IGlobal.allow_raw_request
+        read_only = self.IGlobal.read_only
+
+        published: dict[str, Callable] = {}
+        for name, method in methods.items():
+            if name == RAW_REQUEST_TOOL:
+                # Gated by its own config switch rather than by a group. It stays published
+                # in read-only mode because it is still a working read tool there.
+                if allow_raw:
+                    published[name] = method
+                continue
+            declared = getattr(type(self), name, None)
+            group = getattr(declared, '__github_group__', None)
+            if group is not None and group not in enabled:
+                continue
+            if read_only and getattr(declared, '__github_writes__', False):
+                continue
+            published[name] = method
+        return published
+
     # =======================================================================
     # FILES
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='files',
         input_schema={
             'type': 'object',
             'required': ['path'],
@@ -199,29 +260,61 @@ class IInstance(IInstanceBase):
                 },
             },
         },
-        description='Get the decoded content and metadata of a single file from a GitHub repository.',
+        description=(
+            'Get the decoded content and metadata of a single file from a GitHub repository. Returns found '
+            'false rather than failing when GitHub answers 404, so a missing file does not end the run.'
+        ),
     )
     def file_get(self, args):
         args = normalize_tool_input(args, tool_name='tool_github')
         repo = self._repo(args)
         path = require_str(args, 'path', tool_name='file_get')
-        params = {'ref': args['ref']} if args.get('ref') else None
-        data = call(self._token(), 'GET', f'/repos/{repo}/contents/{path.lstrip("/")}', params=params)
+        ref = args.get('ref')
+        params = {'ref': ref} if ref else None
+        data = call(
+            self._token(),
+            'GET',
+            f'/repos/{repo}/contents/{path.lstrip("/")}',
+            params=params,
+            not_found_ok=True,
+        )
+        if data is None:
+            # GitHub answers 404 identically for a missing file, a repository that does not
+            # exist or is not visible to this token, and an unknown ref, and the body does not
+            # say which. Report the lookup that failed and name the next probe; do not assert
+            # "the file does not exist", which is only one of the four possible causes.
+            return {
+                'found': False,
+                'repo': repo,
+                'path': path,
+                'ref': ref or None,
+                'message': (
+                    f'GitHub returned 404 for "{path}" in {repo}'
+                    + (f' at ref "{ref}"' if ref else '')
+                    + '. GitHub answers 404 the same way for a missing file, a repository that does not '
+                    'exist or is not visible to this token, and an unknown ref, so this does not confirm '
+                    'which. Narrow it with file_list on the parent directory, or repo_get on the repository.'
+                ),
+            }
         if isinstance(data, list):
             raise ValueError(f'Path "{path}" is a directory — use file_list instead')
         content_b64 = data.get('content', '')
         content = base64.b64decode(content_b64).decode('utf-8', errors='replace')
         return {
+            'found': True,
             'path': data.get('path'),
             'name': data.get('name'),
             'sha': data.get('sha'),
             'size': data.get('size'),
-            'content': content,
+            # A token committed to a repository is exactly the thing an agent gets pointed at,
+            # and this is the one tool that hands raw file bytes back into the transcript.
+            'content': redact_text(content, self._token()),
             'html_url': data.get('html_url'),
             'download_url': data.get('download_url'),
         }
 
-    @tool_function(
+    @github_tool(
+        group='files',
         input_schema={
             'type': 'object',
             'properties': {
@@ -242,7 +335,9 @@ class IInstance(IInstanceBase):
             raise ValueError(f'Path "{path}" is a file — use file_get instead')
         return [clean_file_entry(f) for f in data]
 
-    @tool_function(
+    @github_tool(
+        group='files',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['path', 'content', 'message'],
@@ -281,7 +376,9 @@ class IInstance(IInstanceBase):
             'commit_sha': (data.get('commit') or {}).get('sha'),
         }
 
-    @tool_function(
+    @github_tool(
+        group='files',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['path', 'content', 'message', 'sha'],
@@ -320,7 +417,9 @@ class IInstance(IInstanceBase):
             'commit_sha': (data.get('commit') or {}).get('sha'),
         }
 
-    @tool_function(
+    @github_tool(
+        group='files',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['path', 'message', 'sha'],
@@ -351,7 +450,8 @@ class IInstance(IInstanceBase):
     # ISSUES
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='issues',
         input_schema={
             'type': 'object',
             'required': ['issue_number'],
@@ -371,7 +471,8 @@ class IInstance(IInstanceBase):
             raise ValueError(f'#{num} is a pull request — use pr_get instead')
         return clean_issue(data)
 
-    @tool_function(
+    @github_tool(
+        group='issues',
         input_schema={
             'type': 'object',
             'properties': {
@@ -403,7 +504,9 @@ class IInstance(IInstanceBase):
         # GitHub issues endpoint includes PRs — filter them out
         return [clean_issue(i) for i in data if not i.get('pull_request')]
 
-    @tool_function(
+    @github_tool(
+        group='issues',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['title'],
@@ -431,7 +534,9 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'POST', f'/repos/{repo}/issues', body=body)
         return clean_issue(data)
 
-    @tool_function(
+    @github_tool(
+        group='issues',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['issue_number', 'body'],
@@ -452,7 +557,9 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'POST', f'/repos/{repo}/issues/{num}/comments', body={'body': body})
         return {'id': data.get('id'), 'html_url': data.get('html_url'), 'created_at': data.get('created_at')}
 
-    @tool_function(
+    @github_tool(
+        group='issues',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['issue_number'],
@@ -487,7 +594,9 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'PATCH', f'/repos/{repo}/issues/{num}', body=body)
         return clean_issue(data)
 
-    @tool_function(
+    @github_tool(
+        group='issues',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['issue_number'],
@@ -518,7 +627,8 @@ class IInstance(IInstanceBase):
     # PULL REQUESTS
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
         input_schema={
             'type': 'object',
             'required': ['pr_number'],
@@ -536,7 +646,8 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'GET', f'/repos/{repo}/pulls/{num}')
         return clean_pr(data)
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
         input_schema={
             'type': 'object',
             'properties': {
@@ -565,7 +676,9 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'GET', f'/repos/{repo}/pulls', params=params)
         return [clean_pr(pr) for pr in data]
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['title', 'head', 'base'],
@@ -600,7 +713,9 @@ class IInstance(IInstanceBase):
     # REVIEWS
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['pr_number', 'event'],
@@ -636,7 +751,8 @@ class IInstance(IInstanceBase):
             'html_url': data.get('html_url'),
         }
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
         input_schema={
             'type': 'object',
             'required': ['pr_number'],
@@ -669,7 +785,8 @@ class IInstance(IInstanceBase):
             for r in data
         ]
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
         input_schema={
             'type': 'object',
             'required': ['pr_number', 'review_id'],
@@ -695,7 +812,9 @@ class IInstance(IInstanceBase):
             'submitted_at': data.get('submitted_at'),
         }
 
-    @tool_function(
+    @github_tool(
+        group='pull_requests',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['pr_number', 'review_id', 'body'],
@@ -722,7 +841,8 @@ class IInstance(IInstanceBase):
     # REPOSITORY
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='repos',
         input_schema={
             'type': 'object',
             'properties': {
@@ -741,7 +861,8 @@ class IInstance(IInstanceBase):
     # RELEASES
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='releases',
         input_schema={
             'type': 'object',
             'properties': {
@@ -762,7 +883,8 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'GET', f'/repos/{repo}/releases', params=params)
         return [clean_release(r) for r in data]
 
-    @tool_function(
+    @github_tool(
+        group='releases',
         input_schema={
             'type': 'object',
             'required': ['release_id'],
@@ -779,7 +901,9 @@ class IInstance(IInstanceBase):
         rid = require_int(args, 'release_id', tool_name='release_get')
         return clean_release(call(self._token(), 'GET', f'/repos/{repo}/releases/{rid}'))
 
-    @tool_function(
+    @github_tool(
+        group='releases',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['tag_name', 'name'],
@@ -807,7 +931,9 @@ class IInstance(IInstanceBase):
                 body[k] = args[k]
         return clean_release(call(self._token(), 'POST', f'/repos/{repo}/releases', body=body))
 
-    @tool_function(
+    @github_tool(
+        group='releases',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['release_id'],
@@ -833,7 +959,9 @@ class IInstance(IInstanceBase):
             raise ValueError('release_update: provide at least one field to update')
         return clean_release(call(self._token(), 'PATCH', f'/repos/{repo}/releases/{rid}', body=body))
 
-    @tool_function(
+    @github_tool(
+        group='releases',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['release_id'],
@@ -856,7 +984,8 @@ class IInstance(IInstanceBase):
     # WORKFLOWS
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='workflows',
         input_schema={
             'type': 'object',
             'properties': {
@@ -877,7 +1006,8 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'GET', f'/repos/{repo}/actions/workflows', params=params)
         return [clean_workflow(w) for w in (data.get('workflows') or [])]
 
-    @tool_function(
+    @github_tool(
+        group='workflows',
         input_schema={
             'type': 'object',
             'required': ['workflow_id'],
@@ -897,7 +1027,9 @@ class IInstance(IInstanceBase):
         wid = require_str(args, 'workflow_id', tool_name='workflow_get')
         return clean_workflow(call(self._token(), 'GET', f'/repos/{repo}/actions/workflows/{wid}'))
 
-    @tool_function(
+    @github_tool(
+        group='workflows',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['workflow_id', 'ref'],
@@ -929,7 +1061,9 @@ class IInstance(IInstanceBase):
         call(self._token(), 'POST', f'/repos/{repo}/actions/workflows/{wid}/dispatches', body=body)
         return {'dispatched': True, 'workflow_id': wid, 'ref': ref}
 
-    @tool_function(
+    @github_tool(
+        group='workflows',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['workflow_id'],
@@ -948,7 +1082,9 @@ class IInstance(IInstanceBase):
         call(self._token(), 'PUT', f'/repos/{repo}/actions/workflows/{wid}/enable')
         return {'enabled': True, 'workflow_id': wid}
 
-    @tool_function(
+    @github_tool(
+        group='workflows',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['workflow_id'],
@@ -967,7 +1103,8 @@ class IInstance(IInstanceBase):
         call(self._token(), 'PUT', f'/repos/{repo}/actions/workflows/{wid}/disable')
         return {'disabled': True, 'workflow_id': wid}
 
-    @tool_function(
+    @github_tool(
+        group='workflows',
         input_schema={
             'type': 'object',
             'required': ['workflow_id'],
@@ -982,13 +1119,17 @@ class IInstance(IInstanceBase):
         args = normalize_tool_input(args, tool_name='tool_github')
         repo = self._repo(args)
         wid = require_str(args, 'workflow_id', tool_name='workflow_get_usage')
-        return call(self._token(), 'GET', f'/repos/{repo}/actions/workflows/{wid}/timing')
+        data = call(self._token(), 'GET', f'/repos/{repo}/actions/workflows/{wid}/timing')
+        # One of only two tools returning a body this node has not projected through a
+        # clean_* key allowlist, so it is one of only two that can echo anything unexpected.
+        return redact_payload(data, self._token())
 
     # =======================================================================
     # ORGANIZATION
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='repos',
         input_schema={
             'type': 'object',
             'required': ['org'],
@@ -1020,7 +1161,8 @@ class IInstance(IInstanceBase):
     # USERS
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='repos',
         input_schema={
             'type': 'object',
             'properties': {
@@ -1051,7 +1193,9 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'GET', path, params=params)
         return [clean_repo(r) for r in data]
 
-    @tool_function(
+    @github_tool(
+        group='org_members',
+        writes=True,
         input_schema={
             'type': 'object',
             'required': ['org', 'email'],
@@ -1085,7 +1229,8 @@ class IInstance(IInstanceBase):
     # SEARCH & DISCOVERY
     # =======================================================================
 
-    @tool_function(
+    @github_tool(
+        group='search',
         input_schema={
             'type': 'object',
             'required': ['query'],
@@ -1131,7 +1276,8 @@ class IInstance(IInstanceBase):
             for item in (data.get('items') or [])
         ]
 
-    @tool_function(
+    @github_tool(
+        group='search',
         input_schema={
             'type': 'object',
             'required': ['query'],
@@ -1178,7 +1324,8 @@ class IInstance(IInstanceBase):
             results.append(cleaned)
         return results
 
-    @tool_function(
+    @github_tool(
+        group='repos',
         input_schema={
             'type': 'object',
             'properties': {
@@ -1209,7 +1356,8 @@ class IInstance(IInstanceBase):
         data = call(self._token(), 'GET', f'/repos/{repo}/commits', params=params)
         return [clean_commit(c) for c in data]
 
-    @tool_function(
+    @github_tool(
+        group='repos',
         input_schema={
             'type': 'object',
             'required': ['sha'],
@@ -1243,3 +1391,73 @@ class IInstance(IInstanceBase):
             for f in (data.get('files') or [])
         ]
         return result
+
+    # =======================================================================
+    # GENERIC REQUEST
+    # =======================================================================
+
+    @tool_function(
+        input_schema={
+            'type': 'object',
+            'required': ['method', 'path'],
+            'properties': {
+                'method': {
+                    'type': 'string',
+                    'enum': sorted(_ALLOWED_METHODS),
+                    'description': 'HTTP method. In read-only mode only GET is permitted.',
+                },
+                'path': {
+                    'type': 'string',
+                    'description': (
+                        'Path relative to https://api.github.com, starting with a slash: for example '
+                        '"/repos/acme/app/branches", "/repos/acme/app/labels", "/gists" or "/notifications". '
+                        'Do not include the host. The configured default repository is NOT substituted here, '
+                        'so spell out "owner/repo" in the path. Pass query parameters in "params" rather than '
+                        'writing them into the path.'
+                    ),
+                },
+                'params': {
+                    'type': 'object',
+                    'description': 'Query-string parameters, such as per_page and page.',
+                },
+                'body': {
+                    'type': 'object',
+                    'description': 'JSON request body for POST, PUT and PATCH.',
+                },
+            },
+        },
+        description=(
+            'Call any GitHub REST API endpoint directly, by method and path. Use this only for endpoints '
+            'that have no dedicated tool here, such as branches, tags, labels, milestones, gists, projects, '
+            'teams, deployments, check runs or branch protection: the typed tools validate their input and '
+            'return a compact, cleaned result, while this one sends what you give it and returns the raw '
+            'response body. Authentication, the API version header, rate-limit retries and read-only '
+            'enforcement all apply here too, but the tool-group filter does not, so this reaches anything '
+            'the configured token is scoped for. See https://docs.github.com/en/rest for the endpoint '
+            'reference.'
+        ),
+    )
+    def request(self, args):
+        """Call any GitHub REST API endpoint directly."""
+        args = normalize_tool_input(args, tool_name='tool_github')
+        method = require_str(args, 'method', tool_name='request').upper()
+        path = require_str(args, 'path', tool_name='request')
+
+        if method not in _ALLOWED_METHODS:
+            raise ValueError(f'request: method must be one of {", ".join(sorted(_ALLOWED_METHODS))}')
+        # Without this the escape hatch would walk straight around github.readOnly, which is
+        # an advertised control. Path validation is inherited from github_client.call.
+        if method not in _SAFE_METHODS:
+            self._require_write()
+
+        params = args.get('params')
+        body = args.get('body')
+        if params is not None and not isinstance(params, dict):
+            raise ValueError('request: "params" must be an object')
+        if body is not None and not isinstance(body, dict):
+            raise ValueError('request: "body" must be an object')
+
+        data = call(self._token(), method, path, params=params, body=body)
+        # The only tool that returns a response this node has not projected through a key
+        # allowlist, so it is the one place an unmodelled payload reaches the agent whole.
+        return redact_payload(data, self._token())
