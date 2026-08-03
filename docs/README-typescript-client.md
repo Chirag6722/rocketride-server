@@ -58,7 +58,7 @@ Don't have a pipeline yet? Save this minimal `pipeline.pipe` next to your script
 Then build real pipelines visually: visit [RocketRide on GitHub](https://github.com/rocketride-org/rocketride-server) or download the extension directly in your IDE.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/install.png" alt="Install RocketRide extension" width="600">
+  <img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/install-extension.png" alt="Install RocketRide extension" width="600">
 </p>
 
 ## What is RocketRide?
@@ -77,7 +77,7 @@ The same portable `.pipe` file runs against either deployment:
 - **Self-hosted** (free, MIT): Docker, on-prem, or a local process in your IDE. Point the client at your own engine, e.g. `ws://localhost:5565`.
 - **[RocketRide Cloud](https://cloud.rocketride.ai/)**: managed hosting at `https://api.rocketride.ai`, if you would rather not run an engine yourself.
 
-<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/vscode-extension.png" alt="RocketRide extension in Visual Studio Code" width="800">
+<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/pipeline-example.png" alt="Build and run AI pipelines inside your IDE" width="800">
 
 ## Features
 

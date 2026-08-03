@@ -59,7 +59,7 @@ If you need a minimal `.pipe` to test `send()` end-to-end, start with (`project_
 Don't have a pipeline yet? Visit [RocketRide on GitHub](https://github.com/rocketride-org/rocketride-server) or download the extension directly in your IDE.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/install.png" alt="Install RocketRide extension" width="600">
+  <img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/install-extension.png" alt="Install RocketRide extension" width="600">
 </p>
 
 ## What is RocketRide?
@@ -78,7 +78,7 @@ There are two ways to run the engine your client connects to:
 
 The same `.pipe` file runs unchanged on both.
 
-<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/docs/images/vscode-extension.png" alt="RocketRide extension in Visual Studio Code" width="800">
+<img src="https://raw.githubusercontent.com/rocketride-org/rocketride-server/develop/images/pipeline-example.png" alt="Build and run AI pipelines inside your IDE" width="800">
 
 ## Features
 
