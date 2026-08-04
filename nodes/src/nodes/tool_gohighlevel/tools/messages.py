@@ -23,7 +23,15 @@
 # SOFTWARE.
 # =============================================================================
 
-"""Message tools: reading a conversation's messages, sending one, and cancelling a scheduled send."""
+"""Message tools: reading a conversation's messages, sending one, and cancelling a scheduled send.
+
+One module, two groups. The five read tools are ``messages`` and ship in the default set;
+``message_send`` and the two schedule-cancels are ``message_sending``, an explicit opt-in.
+They are the only tools here whose write path has never been run against the live API (a
+trial sub-account has no phone or email provider to send through), and a bad send is a
+real SMS or email from an unattended pipeline. Until someone proves the send path against
+a provisioned sub-account, publishing it should be a deliberate choice, not a default.
+"""
 
 from __future__ import annotations
 
@@ -382,7 +390,7 @@ class MessagesMixin(GoHighLevelToolsBase):
     # -- sending -----------------------------------------------------------
 
     @gohighlevel_tool(
-        group='messages',
+        group='message_sending',
         writes=True,
         input_schema=schema(required=['type', 'contactId'], **_SEND_PROPS),
         description=(
@@ -409,7 +417,7 @@ class MessagesMixin(GoHighLevelToolsBase):
         return self._write('POST', '/conversations/messages', _clean_message, body=body)
 
     @gohighlevel_tool(
-        group='messages',
+        group='message_sending',
         writes=True,
         input_schema=schema(required=['messageId'], messageId=STR('Id of the scheduled message.')),
         description=(
@@ -429,7 +437,7 @@ class MessagesMixin(GoHighLevelToolsBase):
         return self._write('DELETE', f'/conversations/messages/{message_id}/schedule', _cancel_result)
 
     @gohighlevel_tool(
-        group='messages',
+        group='message_sending',
         writes=True,
         input_schema=schema(
             required=['emailMessageId'],

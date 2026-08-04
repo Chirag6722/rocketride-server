@@ -18,8 +18,10 @@ moment the real module changes.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
+import re
 import sys
 import types
 from collections.abc import Iterator
@@ -144,6 +146,7 @@ with _scoped_stubs():
         VERSION_2021_04_15,
         VERSION_2021_07_28,
         GoHighLevelAPIError,
+        _rate_limit_hint,
         check_page_limits,
         paginated,
         version_for,
@@ -699,6 +702,32 @@ class TestRateLimit:
         assert mock_request.call_count == 1
         assert mock_sleep.call_count == 0
 
+    def test_a_numeric_retry_after_renders_as_seconds(self):
+        assert _rate_limit_hint({'Retry-After': '30'}) == 'retry after 30s'
+
+    def test_a_date_form_retry_after_is_not_rendered_as_seconds(self):
+        """RFC 9110 allows an HTTP-date in Retry-After, not just delay-seconds.
+
+        GoHighLevel has never been observed sending the header at all, but the retry
+        path already guards the date form, so the human-readable hint must not be the
+        one place that would render "retry after Wed, 21 Oct 2026 07:28:00 GMT s". A
+        date falls through to the burst-window hint instead.
+        """
+        headers = {
+            'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT',
+            'x-ratelimit-max': '25',
+            'x-ratelimit-interval-milliseconds': '10000',
+        }
+        assert _rate_limit_hint(headers) == 'the burst window allows 25 requests per 10s'
+        assert _rate_limit_hint({'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT'}) == ''
+
+    @pytest.mark.parametrize('bad', ['nan', 'inf', '-inf', '-30'])
+    def test_a_non_finite_or_negative_retry_after_is_not_rendered_either(self, bad):
+        # float() accepts all of these, so the parse alone is not enough of a guard:
+        # "retry after nans" and "retry after -30s" are as garbled as the date form.
+        # The retry path rejects them too, so the hint and the sleep stay consistent.
+        assert _rate_limit_hint({'Retry-After': bad}) == ''
+
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -1082,17 +1111,62 @@ class TestGroupGating:
         assert engine_base.__name__ == 'IInstanceBase', 'IInstanceBase must be the last base'
         assert all(base_position[mixin] < base_position[engine_base] for mixin in ALL_MIXINS)
 
-    def test_an_unknown_group_name_is_dropped(self):
+    def test_a_partially_unknown_value_narrows_to_the_names_that_matched(self):
+        # The dropped name is warned about at runtime by IGlobal.beginGlobal and in the
+        # editor by validateConfig; the selection itself is what the operator asked for
+        # minus the typo, which never publishes more than they intended.
         assert normalize_groups(['contacts', 'nope']) == frozenset({'contacts'})
         assert normalize_groups('contacts, nope') == frozenset({'contacts'})
 
-    @pytest.mark.parametrize('empty', [None, [], '', '   ', 42, ['nope'], [''], {}])
-    def test_empty_or_wholly_unknown_falls_back_to_the_defaults(self, empty):
+    @pytest.mark.parametrize('empty', [None, [], '', '   ', 42, [''], {}])
+    def test_an_empty_or_unconfigured_value_falls_back_to_the_defaults(self, empty):
         assert normalize_groups(empty) == DEFAULT_GROUPS
+
+    @pytest.mark.parametrize(
+        'typo', [['contatcs'], 'contatcs', ['nope', 'also_nope'], 'nope, also_nope', 'opportunites']
+    )
+    def test_a_wholly_unknown_value_raises_rather_than_widening(self, typo):
+        """A config that matches nothing must not fall back to the defaults.
+
+        The fallback would turn one misspelled group name into the 71-tool default set,
+        most of it write-capable: strictly more exposure than the operator asked for, on
+        the most likely typo shape there is. Configured-but-matched-nothing fails at
+        startup instead, like a missing token does.
+        """
+        with pytest.raises(ValueError, match='matched no known tool group'):
+            normalize_groups(typo)
+
+    def test_the_error_names_the_valid_groups(self):
+        with pytest.raises(ValueError, match='contacts'):
+            normalize_groups(['contatcs'])
 
     def test_the_raw_request_tool_follows_its_own_switch(self):
         assert RAW_REQUEST_TOOL in _instance()._collect_tool_methods()
         assert RAW_REQUEST_TOOL not in _instance(allow_raw_request=False)._collect_tool_methods()
+
+    def test_message_sending_is_not_published_by_default(self):
+        """The send path is the one write surface never proven against the live API.
+
+        A bad send is a real SMS or email from an unattended pipeline, so originating
+        messages is an explicit opt-in group rather than part of the default set.
+        Reading messages stays default.
+        """
+        published = _instance()._collect_tool_methods()
+        assert 'message_list' in published
+        assert 'message_get' in published
+        assert 'message_send' not in published
+        assert 'message_schedule_cancel' not in published
+        assert 'message_email_schedule_cancel' not in published
+
+    def test_enabling_message_sending_publishes_the_send_tools(self):
+        published = _instance(tool_groups=normalize_groups(['messages', 'message_sending']))._collect_tool_methods()
+        assert 'message_send' in published
+        assert 'message_schedule_cancel' in published
+        assert 'message_email_schedule_cancel' in published
+        assert 'message_list' in published
+
+    def test_the_default_set_publishes_71_tools_plus_the_raw_request(self):
+        assert len(_instance()._collect_tool_methods()) == 72
 
     def test_every_tool_carries_a_known_group(self):
         """Closes the hole where an untagged tool would publish unconditionally."""
@@ -1247,14 +1321,10 @@ class TestSchemas:
         assert missing == []
 
     def test_every_published_tool_has_an_output_schema(self):
-        # The raw request tool is the one exemption, and it is a real one: it returns an
-        # undeclared response body straight from whatever endpoint the agent named, so
-        # there is no shape to declare.
-        missing = [
-            name
-            for name, attr in _tool_attrs()
-            if name != RAW_REQUEST_TOOL and not attr.__tool_meta__.get('output_schema')
-        ]
+        # 102 of 102, raw request tool included: its schema is a bare object that tells
+        # the agent the one thing distinguishing it from the typed tools, that the body
+        # is not projected through a key allowlist.
+        missing = [name for name, attr in _tool_attrs() if not attr.__tool_meta__.get('output_schema')]
         assert missing == []
 
     def test_no_description_contains_an_em_dash(self):
@@ -1348,3 +1418,205 @@ class TestArgNormalisation:
     def test_a_tool_name_typo_in_args_is_a_hard_error(self):
         with pytest.raises(ValueError, match='no such tool method'):
             _instance()._args({}, 'contact_lst')
+
+
+# ---------------------------------------------------------------------------
+# services.json stays in sync with the code
+#
+# The editor reads services.json; the runtime reads tool_groups.py and the group
+# stamps. Nothing at import time ties them together, so these tests do.
+# ---------------------------------------------------------------------------
+
+# From the test file's own location, not inspect.getfile(IInstance): under the
+# engine-backed builder run the node module is engine-loaded and carries no
+# __file__, so inspect.getfile raises there. The relative layout is the same one
+# the sys.path.insert at the top of this file already relies on.
+_NODE_SRC = Path(__file__).resolve().parents[2] / 'src' / 'nodes' / 'tool_gohighlevel'
+_SERVICES_JSON = _NODE_SRC / 'services.json'
+
+
+def _tool_groups_field() -> dict:
+    return json.loads(_SERVICES_JSON.read_text(encoding='utf-8'))['fields']['gohighlevel.toolGroups']
+
+
+def _group_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for name, attr in _tool_attrs():
+        group = getattr(attr, '__gohighlevel_group__', None)
+        if group:
+            counts[group] = counts.get(group, 0) + 1
+    return counts
+
+
+class TestServicesJsonGroups:
+    def test_the_enum_lists_every_group_exactly_once_plus_all(self):
+        values = [value for value, _label in _tool_groups_field()['items']['enum']]
+        assert values == sorted(ALL_GROUPS) + ['all']
+
+    def test_every_label_carries_the_real_tool_count(self):
+        """The pipedrive-style "(N)" in each label is prose the code never reads.
+
+        A tool added to a group without touching services.json would leave the editor
+        lying about what the group publishes, so the counts are pinned to the stamps.
+        """
+        counts = _group_counts()
+        counts['all'] = sum(counts.values())
+        wrong = []
+        for value, label in _tool_groups_field()['items']['enum']:
+            match = re.search(r'\((\d+)', label)
+            if not match or int(match.group(1)) != counts[value]:
+                wrong.append(f'{value}: label says {match.group(1) if match else "nothing"}, code has {counts[value]}')
+        assert wrong == []
+
+    def test_the_labels_mark_exactly_the_default_groups(self):
+        marked = {value for value, label in _tool_groups_field()['items']['enum'] if ', default)' in label}
+        assert marked == DEFAULT_GROUPS
+
+    def test_duplicate_selections_are_rejected_by_the_schema(self):
+        assert _tool_groups_field().get('uniqueItems') is True
+
+    def test_the_default_stays_empty_meaning_the_default_set(self):
+        """Deliberate drift from tool_pipedrive, which lists its defaults here.
+
+        tool_groups.py is the single source of truth for the default set; an empty
+        value resolves to DEFAULT_GROUPS in normalize_groups. What the empty field
+        publishes is spelled out by the default markers on the labels instead.
+        """
+        assert _tool_groups_field()['default'] == []
+        assert normalize_groups(_tool_groups_field()['default']) == DEFAULT_GROUPS
+
+
+# ---------------------------------------------------------------------------
+# Tool-name literals
+# ---------------------------------------------------------------------------
+
+
+class TestToolNameLiterals:
+    """Every hand-typed tool-name literal names the method it sits in.
+
+    _declared_schema already raises for a name that exists on no method. The subtler
+    copy-paste, a name that exists and belongs to a different tool, would validate the
+    agent's arguments against the wrong schema and pass every other test in this suite,
+    so it is pinned here by scanning the source: the literal passed to self._args,
+    require_id, require_text, and any tool=/tool_name= keyword must equal the name of
+    the enclosing method.
+    """
+
+    @staticmethod
+    def _literal_of(call: ast.Call) -> str | None:
+        func = call.func
+        if isinstance(func, ast.Attribute) and func.attr == '_args' and len(call.args) >= 2:
+            arg = call.args[1]
+            return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+        if isinstance(func, ast.Name) and func.id in ('require_id', 'require_text') and len(call.args) >= 3:
+            arg = call.args[2]
+            return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+        for keyword in call.keywords:
+            if keyword.arg in ('tool', 'tool_name'):
+                value = keyword.value
+                return value.value if isinstance(value, ast.Constant) and isinstance(value.value, str) else None
+        return None
+
+    def test_every_tool_name_literal_matches_its_method(self):
+        src_dir = _NODE_SRC
+        offenders = []
+        for path in sorted(src_dir.rglob('*.py')):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+            for cls in classes:
+                for fn in [node for node in cls.body if isinstance(node, ast.FunctionDef)]:
+                    for call in [node for node in ast.walk(fn) if isinstance(node, ast.Call)]:
+                        literal = self._literal_of(call)
+                        if literal is not None and literal != fn.name:
+                            offenders.append(f'{path.name}:{call.lineno}: {fn.name} passes {literal!r}')
+        assert offenders == []
+
+    def test_the_scanner_actually_sees_the_literals(self):
+        """Guards the guard: an AST scanner that matches nothing passes vacuously."""
+        src_dir = _NODE_SRC
+        seen = 0
+        for path in sorted(src_dir.rglob('*.py')):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and self._literal_of(node) is not None:
+                    seen += 1
+        assert seen > 100, f'expected well over 100 tool-name literals, saw {seen}'
+
+
+# ---------------------------------------------------------------------------
+# IGlobal config handling
+#
+# The runtime half of the group-typo story lives in IGlobal, not tool_groups: a
+# partial typo has to reach the job log, and a wholly unknown value has to stop
+# startup. Without these tests, deleting the warning call would pass silently.
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _iglobal_harness(config: dict) -> Iterator[tuple]:
+    """A begin-able IGlobal with the engine seams stubbed and warnings captured."""
+    # Through sys.modules: the package __init__ re-exports the IGlobal class under the
+    # same name, so an ordinary "import tool_gohighlevel.IGlobal" hands back the class.
+    import tool_gohighlevel.IGlobal  # noqa: F401
+
+    iglobal_mod = sys.modules['tool_gohighlevel.IGlobal']
+
+    warning_mock = Mock()
+    depends_mod = types.ModuleType('depends')
+    depends_mod.load_depends = lambda _file: None
+    original_depends = sys.modules.get('depends')
+    sys.modules['depends'] = depends_mod
+    try:
+        with (
+            patch.object(iglobal_mod, 'warning', warning_mock),
+            patch.object(iglobal_mod.Config, 'getNodeConfig', staticmethod(lambda *_a: dict(config)), create=True),
+        ):
+            glob = iglobal_mod.IGlobal.__new__(iglobal_mod.IGlobal)
+            glob.glb = Mock()
+            glob.IEndpoint = Mock()
+            glob.IEndpoint.endpoint.openMode = object()  # anything but OPEN_MODE.CONFIG
+            yield glob, warning_mock
+    finally:
+        if original_depends is None:
+            sys.modules.pop('depends', None)
+        else:
+            sys.modules['depends'] = original_depends
+
+
+class TestIGlobalGroupWarnings:
+    @staticmethod
+    def _config(**overrides) -> dict:
+        cfg = {'privateIntegrationToken': GHL_TEST_TOKEN, 'locationId': LOCATION_ID}
+        cfg.update(overrides)
+        return cfg
+
+    @staticmethod
+    def _logged(warning_mock: Mock) -> str:
+        return ' '.join(str(arg) for call in warning_mock.call_args_list for arg in call.args)
+
+    def test_a_partial_typo_narrows_and_warns_in_the_job_log(self):
+        with _iglobal_harness(self._config(toolGroups=['contacts', 'nope'])) as (glob, warning_mock):
+            glob.beginGlobal()
+            assert glob.tool_groups == frozenset({'contacts'})
+            logged = self._logged(warning_mock)
+            assert 'nope' in logged
+            assert 'contacts' in logged
+
+    def test_a_clean_config_warns_nothing(self):
+        with _iglobal_harness(self._config(toolGroups=['contacts'])) as (glob, warning_mock):
+            glob.beginGlobal()
+            assert glob.tool_groups == frozenset({'contacts'})
+            warning_mock.assert_not_called()
+
+    def test_a_wholly_unknown_config_stops_startup(self):
+        with _iglobal_harness(self._config(toolGroups=['contatcs'])) as (glob, _warning_mock):
+            with pytest.raises(ValueError, match='matched no known tool group'):
+                glob.beginGlobal()
+
+    def test_validate_config_flags_a_value_that_would_fail_startup(self):
+        """The editor sees both halves: the unknown names and the startup consequence."""
+        with _iglobal_harness(self._config(toolGroups=['contatcs'])) as (glob, warning_mock):
+            glob.validateConfig()
+            logged = self._logged(warning_mock)
+            assert 'unknown tool group' in logged
+            assert 'fail to start' in logged

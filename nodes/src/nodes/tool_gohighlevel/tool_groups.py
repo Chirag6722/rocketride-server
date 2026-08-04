@@ -61,6 +61,7 @@ ALL_GROUPS = frozenset(
         'custom_values',
         'location_tags',
         'locations',
+        'message_sending',
         'messages',
         'opportunities',
         'pipelines',
@@ -69,10 +70,15 @@ ALL_GROUPS = frozenset(
 )
 
 #: Published when the operator has not chosen otherwise: the set an agent needs to
-#: run lead nurture and appointment booking end to end, at 74 of the 101 tools.
+#: run lead nurture and appointment booking end to end, at 71 of the 101 tools.
 #: ``users`` is in here despite being administrative because it is 3 read-only tools
 #: and it is the only way to resolve the user ids that ``assignedTo``, ``followers``
 #: and ``assignedUserId`` need across contacts, opportunities, tasks and appointments.
+#: ``message_sending`` is deliberately absent: ``message_send`` and the two
+#: schedule-cancels are the only tools whose write path has never been exercised
+#: against the live API (a trial sub-account has no phone or email provider), and a
+#: bad send is a real SMS or email from an unattended pipeline, which cannot be
+#: recalled. Reading messages stays default; originating them is an explicit opt-in.
 DEFAULT_GROUPS = frozenset(
     {
         'appointments',
@@ -111,9 +117,21 @@ def group_names(raw) -> list[str]:
 def normalize_groups(raw) -> frozenset:
     """Turn the configured ``toolGroups`` value into a set of known group names.
 
-    Matching is case-insensitive, unknown names are ignored (they are surfaced as a
-    warning by ``IGlobal.validateConfig``), and ``all`` means every implemented group.
-    An empty or missing value falls back to the defaults.
+    Matching is case-insensitive and ``all`` means every implemented group. An empty or
+    missing value falls back to the defaults; that is "not configured", and the default
+    set is the documented meaning of leaving the field alone.
+
+    A configured value that matches nothing is different: it raises. Falling back to the
+    defaults there would turn one misspelled group name into 71 published tools, most of
+    them write-capable, which widens exposure past what the operator asked for.
+    ``beginGlobal`` already refuses to start on a missing token or location id, so a
+    config that selects nothing fails the same way, loudly and at startup. A partially
+    unknown value narrows to the names that matched; ``IGlobal`` reports the dropped
+    names as a runtime warning, and ``validateConfig`` warns about them in the editor.
+
+    Raises:
+        ValueError: If ``raw`` names at least one group but none of the names is a
+            group this node implements.
     """
     names = {name.lower() for name in group_names(raw)}
     if not names:
@@ -121,7 +139,13 @@ def normalize_groups(raw) -> frozenset:
     if 'all' in names or '*' in names:
         return ALL_GROUPS
     selected = names & ALL_GROUPS
-    return frozenset(selected) if selected else DEFAULT_GROUPS
+    if not selected:
+        raise ValueError(
+            'gohighlevel.toolGroups matched no known tool group: '
+            f'{", ".join(sorted(names))}. Valid groups: {", ".join(sorted(ALL_GROUPS))}, '
+            'or "all". Leave the field empty for the default set.'
+        )
+    return frozenset(selected)
 
 
 def unknown_groups(raw) -> list[str]:

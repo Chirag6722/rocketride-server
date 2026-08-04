@@ -32,30 +32,35 @@ agent.
 | `privateIntegrationToken` | string | Default empty. Sub-account Private Integration Token (Settings -> Private Integrations), sent as `Authorization: Bearer`. Observed tokens start with `pit-`. Stored encrypted. |
 | `locationId` | string | Default empty. The sub-account this node operates on, from Settings -> Business Profile. Required: the token is opaque, so the location cannot be derived from it. |
 | `readOnly` | boolean | Default false. When enabled, every create, update and delete tool is hidden from the agent, and `request` accepts only GET. |
-| `toolGroups` | array | Default empty, which publishes the recommended set of 74 tools. Name groups to change that, or use `["all"]` for all 101. |
+| `toolGroups` | array | Default empty, which publishes the recommended set of 71 tools. Name groups to change that, or use `["all"]` for all 101. |
 | `allowRawRequest` | boolean | Default true. Publishes the generic `request` tool. |
 
 ### Tool groups
 
-Full coverage here is 101 tools across 17 groups. That is more than an LLM can choose
+Full coverage here is 101 tools across 18 groups. That is more than an LLM can choose
 between reliably, so the node publishes only the groups named in **Tool groups**. Leaving
-the field empty publishes the default set: **74 tools** across `appointments`,
+the field empty publishes the default set: **71 tools** across `appointments`,
 `calendars`, `contact_notes`, `contact_tasks`, `contacts`, `conversations`,
 `custom_fields`, `messages`, `opportunities`, `pipelines` and `users`, which is everything
 an agent needs to run lead nurture and appointment booking end to end. `users` is in the
 default set despite being administrative: it is three read-only tools, and it is the only
 way to resolve the user ids that `assignedTo`, `followers` and `assignedUserId` need.
+`message_sending` is deliberately not: reading messages is default, but originating one
+from an unattended pipeline cannot be recalled, so sending is an explicit opt-in.
 
 Available groups:
 
 `appointment_notes`, `appointments`, `businesses`, `calendar_groups`, `calendars`,
 `contact_notes`, `contact_tasks`, `contacts`, `conversations`, `custom_fields`,
-`custom_values`, `location_tags`, `locations`, `messages`, `opportunities`, `pipelines`,
-`users`.
+`custom_values`, `location_tags`, `locations`, `message_sending`, `messages`,
+`opportunities`, `pipelines`, `users`.
 
 A tool in a group that is not published is invisible to the agent and refused if invoked
-anyway. Group names are matched case-insensitively; a name this node does not implement is
-reported as a warning in the editor and otherwise ignored.
+anyway. Group names are matched case-insensitively. A name this node does not implement is
+reported as a warning in the editor; at runtime it is dropped from the selection with a
+warning in the job log, and a `toolGroups` value that names *only* unknown groups stops
+the pipeline at startup. Falling back to the defaults there would publish more tools than
+the misspelled config asked for.
 
 ### Pagination
 
@@ -388,17 +393,27 @@ read-only mode hides.
 | `location_get` |  | Get the configured sub-account, which GoHighLevel also calls a location. |
 | `location_tasks_search` |  | Search tasks across the whole sub-account, optionally narrowed by contact, assignee, business, completion state or free text. |
 
-### `messages` (8 tools, default)
+### `message_sending` (3 tools, opt in)
+
+Opt-in on purpose, and not part of the default set: these are the only tools whose write
+path has never been exercised against the live API (a trial sub-account has no phone or
+email provider to send through), and a send from an unattended pipeline cannot be
+recalled. Enable the group only on a sub-account where the send path has been proven.
+
+| Tool | Writes | Description |
+|---|---|---|
+| `message_email_schedule_cancel` | yes | Cancel a scheduled email that has not gone out yet. |
+| `message_schedule_cancel` | yes | Cancel a message that was scheduled but has not gone out yet. |
+| `message_send` | yes | Send a message to a contact on any channel: SMS, email, WhatsApp, Instagram, Facebook, RCS, TikTok, live chat or a custom provider. |
+
+### `messages` (5 tools, default)
 
 | Tool | Writes | Description |
 |---|---|---|
 | `message_email_get` |  | Get one email message by id, with its subject, sender, to, cc and bcc lists, thread id and attachment URLs. |
-| `message_email_schedule_cancel` | yes | Cancel a scheduled email that has not gone out yet. |
 | `message_export` |  | Export messages across the whole configured sub-account, rather than one conversation at a time. |
 | `message_get` |  | Get one message by id, including its body, direction, delivery status and attachment URLs. |
 | `message_list` |  | Read the messages in one conversation. |
-| `message_schedule_cancel` | yes | Cancel a message that was scheduled but has not gone out yet. |
-| `message_send` | yes | Send a message to a contact on any channel: SMS, email, WhatsApp, Instagram, Facebook, RCS, TikTok, live chat or a custom provider. |
 | `message_transcription_get` |  | Get the speech-to-text transcription of a recorded call or voicemail. |
 
 ### `opportunities` (10 tools, default)

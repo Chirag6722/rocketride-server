@@ -47,6 +47,7 @@ from ai.common.utils import require_str
 from .gohighlevel_client import redact_payload
 from .IGlobal import IGlobal
 from .tool_groups import RAW_REQUEST_TOOL
+from .tools._base import OBJ
 from .tools import (
     AppointmentNotesMixin,
     AppointmentsMixin,
@@ -197,6 +198,10 @@ class IInstance(
             'this one sends what you give it and returns the raw response body. The Authorization and Version '
             'headers are added automatically, so do not pass them. Rate-limit retries and read-only enforcement '
             'apply here too.'
+        ),
+        output_schema=OBJ(
+            'The raw GoHighLevel response body, exactly as the endpoint returned it. Unlike the typed tools '
+            'this is not projected through a key allowlist, so the shape is whatever that endpoint documents.'
         ),
     )
     def request(self, args):

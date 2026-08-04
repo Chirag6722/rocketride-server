@@ -55,10 +55,31 @@
 		"gohighlevel.toolGroups": {
 			"type": "array",
 			"title": "Tool groups",
-			"description": "Which groups of GoHighLevel tools this node publishes to the agent. This node implements 101 tools across 17 groups, far more than an LLM can choose between reliably, so only the listed groups are exposed. <b>Leave this empty for the recommended set</b>: 74 tools across appointments, calendars, contact_notes, contact_tasks, contacts, conversations, custom_fields, messages, opportunities, pipelines and users, which is everything an agent needs to run lead nurture and appointment booking end to end. Use <b>all</b> to publish all 101. Available groups: appointment_notes, appointments, businesses, calendar_groups, calendars, contact_notes, contact_tasks, contacts, conversations, custom_fields, custom_values, location_tags, locations, messages, opportunities, pipelines, users.",
+			"description": "Which groups of GoHighLevel tools this node publishes to the agent. This node implements 101 tools across 18 groups, far more than an LLM can choose between reliably, so only the listed groups are exposed. <b>Leave this empty for the recommended set</b>: the 71 tools marked default below, which is everything an agent needs to run lead nurture and appointment booking end to end. Use <b>all</b> to publish all 101. Naming groups replaces the default set rather than adding to it, and a value that names only unknown groups stops the pipeline at startup rather than widening back to the defaults. <b>message_sending</b> (send a message, cancel a scheduled send) is a deliberate opt-in: sends from an unattended pipeline cannot be recalled.",
+			"uniqueItems": true,
 			"items": {
 				"type": "string",
-				"enum": ["appointment_notes", "appointments", "businesses", "calendar_groups", "calendars", "contact_notes", "contact_tasks", "contacts", "conversations", "custom_fields", "custom_values", "location_tags", "locations", "messages", "opportunities", "pipelines", "users", "all"]
+				"enum": [
+					["appointment_notes", "Appointment notes (4)"],
+					["appointments", "Appointments (9, default)"],
+					["businesses", "Businesses (5)"],
+					["calendar_groups", "Calendar groups (6)"],
+					["calendars", "Calendars (5, default)"],
+					["contact_notes", "Contact notes (5, default)"],
+					["contact_tasks", "Contact tasks (6, default)"],
+					["contacts", "Contacts (16, default)"],
+					["conversations", "Conversations (5, default)"],
+					["custom_fields", "Custom fields (5, default)"],
+					["custom_values", "Custom values (5)"],
+					["location_tags", "Location tags (5)"],
+					["locations", "Locations (2)"],
+					["message_sending", "Message sending (3, opt-in: outbound writes)"],
+					["messages", "Messages: read only (5, default)"],
+					["opportunities", "Opportunities (10, default)"],
+					["pipelines", "Pipelines (2, default)"],
+					["users", "Users (3, default)"],
+					["all", "All groups (101)"]
+				]
 			},
 			"default": [],
 			"optional": true

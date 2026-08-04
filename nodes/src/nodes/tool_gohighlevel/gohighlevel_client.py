@@ -346,9 +346,18 @@ def _rate_limit_hint(headers: Any) -> str:
     agent to sleep and retry a request that will never succeed. :func:`_raise_ghl_error` owns
     that gate.
     """
+    # RFC 9110 allows delay-seconds or an HTTP-date here. Only a sane seconds form
+    # renders; a date would read "retry after Wed, 21 Oct 2026 ...s", and "nan", "inf"
+    # or a negative would be garbled the same way. The retry path applies the same two
+    # checks (float, then finite and non-negative), so the two stay consistent.
     retry_after = _hdr(headers, 'Retry-After')
-    if retry_after:
-        return f'retry after {retry_after}s'
+    if retry_after is not None:
+        try:
+            seconds = float(retry_after)
+        except (TypeError, ValueError):
+            seconds = None
+        if seconds is not None and math.isfinite(seconds) and seconds >= 0:
+            return f'retry after {seconds:g}s'
     if daily_budget_exhausted(headers):
         limit = _hdr(headers, _RL_DAILY_LIMIT) or 'the account'
         return f'the daily request budget ({limit} requests) is exhausted, so retrying will not help until it resets'
