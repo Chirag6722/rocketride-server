@@ -287,11 +287,11 @@ class IEndpoint(IEndpointBase):
         """Route a message to the pipeline and send back the first answer.
 
         Text content and attachments are ingested independently: the text is
-        routed to the text lane, and each attachment is downloaded (subject to
+        routed to the text lane, and every attachment is downloaded (subject to
         the size cap) and routed to the image/audio/video/tags lane by MIME
-        type. Attachments are processed in order and iteration stops once one
-        produces a non-empty answer. The first non-empty answer overall — text
-        first, then attachments — is sent back per the configured reply mode.
+        type. All attachments are ingested (a message may carry up to 10); only
+        the first non-empty answer overall — text first, then attachments in
+        order — is sent back per the configured reply mode.
 
         Args:
             message (discord.Message): The message to process.
@@ -310,14 +310,14 @@ class IEndpoint(IEndpointBase):
                 if text_reply:
                     reply = text_reply
 
-            # Attachments are ingested even when the text produced a reply (e.g.
-            # captioned uploads). Stop at the first attachment that answers.
+            # A single Discord message can carry up to 10 attachments. As a
+            # source node we ingest every one (each is downloaded, routed, and
+            # counted via monitorCompleted); only the first non-empty answer is
+            # kept for the reply.
             for attachment in message.attachments:
                 att_reply = await self._process_attachment(message, attachment)
-                if att_reply:
-                    if not reply:
-                        reply = att_reply
-                    break
+                if att_reply and not reply:
+                    reply = att_reply
 
             if reply and self._send_responses:
                 await self._send_response(message, reply)
@@ -486,8 +486,10 @@ class IEndpoint(IEndpointBase):
             try:
                 thread = await self._send_chunk(message, chunk, thread)
             except discord.RateLimited as e:
-                # RateLimited (not HTTPException) is the exception that carries
-                # retry_after in discord.py.
+                # discord.py handles 429s internally (honoring Retry-After) and
+                # only surfaces RateLimited when the client sets
+                # max_ratelimit_timeout, which we do not — this is defensive:
+                # retry once after the reported delay if it is ever raised.
                 debug(f'Discord: rate limited; retrying after {e.retry_after}s')
                 await asyncio.sleep(float(e.retry_after))
                 try:

@@ -14,7 +14,7 @@ The node uses **discord.py** to maintain a resilient Gateway connection with aut
 
 ### Lanes
 
-The node is a pipeline source. Its `_source` lane emits to `text`, `image`, `audio`, `video`, and `Data`. Each Discord message type maps to one output lane:
+The node is a pipeline source. Its `_source` lane emits to `text`, `image`, `audio`, `video`, and `tags`. Each Discord message type maps to one output lane:
 
 | Discord message | Output lane | Notes |
 |-----------------|-------------|-------|
@@ -22,7 +22,7 @@ The node is a pipeline source. Its `_source` lane emits to `text`, `image`, `aud
 | Image attachment | `image` | Downloaded and routed with MIME type (e.g., `image/png`). |
 | Audio attachment | `audio` | Downloaded with MIME type (e.g., `audio/mpeg`). |
 | Video attachment | `video` | Downloaded with MIME type (e.g., `video/mp4`). |
-| Document (PDF, Word, archive, etc.) | `Data` | Downloaded as tagged stream data; connect a Parser node downstream. |
+| Document (PDF, Word, archive, etc.) | `tags` | Downloaded as tagged stream data; connect a Parser node downstream. |
 
 Entry URLs are built as `discord://<channel_id>/<message_id>` for text and `discord://<channel_id>/<attachment_id>` for files.
 
@@ -78,7 +78,7 @@ If the pipeline produces no answers, nothing is sent.
 ### Limits & behavior
 
 - **2000 character limit**: Discord's per-message limit. Long answers are split into multiple messages.
-- **Multiple attachments per message**: A message may carry up to 10 attachments. They are processed in order and iteration stops once an attachment produces a non-empty pipeline answer, so only the attachments up to that point are routed.
+- **Multiple attachments per message**: A message may carry up to 10 attachments. Every attachment is downloaded and routed into the pipeline; only the first non-empty pipeline answer (text first, then attachments in order) is sent back as the reply.
 - **Attachment download limit**: Configurable via `maxAttachmentBytes`. Files exceeding this limit are skipped with a debug log entry.
 - **One answer per message** (as sent): Only the first pipeline answer is returned to the channel; additional answers are discarded.
 - **Missing token**: If `botToken` is empty, the node reports `Discord Bot: missing bot token` in the monitor and stays idle.
@@ -95,7 +95,7 @@ If the pipeline produces no answers, nothing is sent.
 2. The node receives the `MESSAGE_CREATE` event from the Gateway.
 3. For each attachment, the node checks its size against `maxAttachmentBytes`.
 4. If under the limit, the node downloads the file concurrently via the Discord CDN.
-5. The file is routed to the appropriate lane (image, audio, video, or Data based on MIME type).
+5. The file is routed to the appropriate lane (image, audio, video, or tags based on MIME type).
 6. On failure (network, size, or permission), the attachment is skipped with a debug log and `monitorFailed()` call.
 
 ### MIME type detection
@@ -121,7 +121,7 @@ Leave both empty to listen to all servers and channels the bot has access to.
 
 ## Limits & reliability
 
-- **Rate-limit handling**: On Discord 429 (Too Many Requests), the node respects the `Retry-After` header and retries once.
+- **Rate-limit handling**: discord.py handles Discord 429 (Too Many Requests) responses internally, honoring `Retry-After` with automatic backoff and retry. The node keeps a defensive extra retry for any `RateLimited` the library surfaces.
 - **No backfill on downtime**: The Gateway is push-based. Messages sent while the node is offline are not redelivered.
 - **No edit/delete handling**: Only `MESSAGE_CREATE` events are processed. Edits and deletes are ignored.
 - **Byte accounting**: Processed message and file sizes are reported to the monitor via `monitorCompleted()` / `monitorFailed()`.
@@ -148,7 +148,7 @@ Paste the token into the `discord.botToken` field.
 - **Missing token**: Node reports status and stays idle.
 - **Gateway connection failure**: discord.py automatically reconnects with exponential backoff.
 - **Attachment download failure**: Logged via `debug()`, entry is skipped, byte count reported via `monitorFailed()`.
-- **Rate limit**: On 429 response, the node retries once after the `Retry-After` delay.
+- **Rate limit**: 429 responses are handled by discord.py internally (honoring `Retry-After` with backoff/retry); a defensive extra retry covers any `RateLimited` the library surfaces.
 - **Pipeline processing error**: Logged via `debug()`, message processing continues for other messages.
 
 ---
@@ -161,7 +161,7 @@ Paste the token into the `discord.botToken` field.
 | Field | Type | Description | Default |
 |---|---|---|---|
 | `Pipe.source.parameters` |  | **Discord Bot Configuration** |  |
-| `discord.botToken` | `string` | **Bot Token**<br/>Discord bot token from the Developer Portal (keep this secret — do not share) |  |
+| `discord.botToken` | `string` | **Bot Token**<br/>Discord bot token from the Developer Portal (keep this secret - do not share) |  |
 | `discord.guildIds` | `array` | **Server IDs (Guild IDs)**<br/>List of Discord server IDs to listen to. Leave empty to listen to all servers the bot is in. |  |
 | `discord.channelIds` | `array` | **Channel IDs**<br/>List of channel IDs to listen to. Leave empty to listen to all channels. |  |
 | `discord.ignoreBots` | `boolean` | **Ignore Bot Messages**<br/>If true (default), messages from other bots are ignored to prevent loops. | `true` |
