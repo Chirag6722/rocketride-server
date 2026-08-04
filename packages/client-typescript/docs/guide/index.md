@@ -15,7 +15,7 @@ title: TypeScript
 <p align="center">
   <a href="https://www.npmjs.com/package/rocketride"><img src="https://img.shields.io/npm/v/rocketride?color=222223&label=NPM" alt="npm" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server"><img src="https://img.shields.io/github/stars/rocketride-org/rocketride-server?style=flat&color=238636&label=GitHub&logo=github&logoColor=white" alt="GitHub" /></a>
-  <a href="https://discord.gg/9hr3tdZmEG"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.gg/PMXrtenMsY"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server/blob/develop/LICENSE"><img src="https://img.shields.io/badge/License-MIT-41b6e6" alt="MIT License" /></a>
 </p>
 
@@ -74,6 +74,7 @@ You build your `.pipe` - and you run it against the fastest AI runtime available
 - **File upload** - `sendFiles()` with progress; streaming with `pipe()`
 - **Connection lifecycle** - Optional persist mode, reconnection, and callbacks (`onConnected`, `onDisconnected`, `onConnectError`)
 - **Full TypeScript support** - Complete type definitions
+- **Telemetry reporting** - The shared loose `report()` core via `rocketride/analytics`; each app owns its own event taxonomy ([Analytics / Telemetry Reporting](/develop/typescript/analytics))
 
 ---
 
@@ -140,6 +141,7 @@ await client.connect();
 | `disconnect`          | `disconnect(): Promise<void>`                                                  | -         | Closes the connection and cancels any pending reconnection. Call when the user explicitly disconnects or the app is shutting down.                                                                                                                                                                                                                                                      |
 | `isConnected`         | `isConnected(): boolean`                                                       | `boolean` | Whether the client is currently connected. Use before calling `use()` or `send()` to avoid confusing errors.                                                                                                                                                                                                                                                                            |
 | `setConnectionParams` | `setConnectionParams(options: { uri?: string; auth?: string }): Promise<void>` | -         | Updates server URI and/or auth at runtime. If currently connected, disconnects and reconnects with the new params (in persist mode, reconnection is scheduled; otherwise reconnects once). Use when the user changes server or credentials without creating a new client.                                                                                                               |
+| `setEnv`              | `setEnv(env: Record<string, string>): void`                                    | -         | Replaces the client's env dictionary (seeded from `config.env` or, in Node, `process.env`). `use()`/`validate()` read it to build the `ROCKETRIDE_*` substitution env sent with the pipeline; `attach()` also consults `ROCKETRIDE_APIKEY` from it when no explicit credential is given. Mirrors the Python SDK's `set_env`.                                                            |
 
 **How to use:** For one-off scripts, call `connect()` once, do your work, then `disconnect()`. For UIs, use `persist: true` and rely on the client to reconnect; only call `disconnect()` when the user logs out or you are done with the client. The client supports `await using` (Symbol.asyncDispose) for automatic disconnect when exiting scope.
 
@@ -546,7 +548,7 @@ await client.disconnect();
 
 - [Documentation](https://docs.rocketride.org/)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
-- [Discord](https://discord.gg/9hr3tdZmEG)
+- [Discord](https://discord.gg/PMXrtenMsY)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
 
 ## License

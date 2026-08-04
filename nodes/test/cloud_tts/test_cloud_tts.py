@@ -21,9 +21,10 @@ import pytest
 
 _DIR = Path(__file__).resolve().parents[2] / 'src' / 'nodes' / 'cloud_tts'
 
-# Reuse the contract-test JSONC parser (handles // comments and :// URLs).
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from test_contracts import parse_service_json  # noqa: E402
+# Reuse the contract-test JSONC parser (handles // comments and :// URLs). Imported
+# package-relative: putting nodes/test on sys.path would let its node-named subpackages
+# shadow the real node packages under src/nodes (see #1687).
+from ..test_contracts import parse_service_json
 
 _SERVICES = ['services.tts_openai.json', 'services.tts_elevenlabs.json']
 
@@ -31,30 +32,43 @@ _SERVICES = ['services.tts_openai.json', 'services.tts_elevenlabs.json']
 def _load_iglobal():
     """Import nodes/cloud_tts/IGlobal.py standalone, stubbing engine-only deps.
 
-    Uses setdefault so a real engine runtime (dist/server on sys.path in CI) is
-    used when present, and the stubs kick in only when it is not.
+    Stubs the engine-only modules only while the node imports, then restores
+    sys.modules so the rocketlib/ai stubs never leak to sibling tests.
     """
+    # Save prior state so the stubs are scoped to the import below.
+    _core = ('rocketlib', 'ai', 'ai.common', 'ai.common.config')
+    _saved = {name: sys.modules.get(name) for name in _core}
+
     rocketlib = types.ModuleType('rocketlib')
     rocketlib.IGlobalBase = type('IGlobalBase', (), {})
     rocketlib.OPEN_MODE = type('OPEN_MODE', (), {'CONFIG': 'config'})
-    sys.modules.setdefault('rocketlib', rocketlib)
+    sys.modules['rocketlib'] = rocketlib
 
-    sys.modules.setdefault('ai', types.ModuleType('ai'))
-    sys.modules.setdefault('ai.common', types.ModuleType('ai.common'))
+    sys.modules['ai'] = types.ModuleType('ai')
+    sys.modules['ai'].__path__ = []  # mark as package so sub-imports resolve
+    sys.modules['ai.common'] = types.ModuleType('ai.common')
+    sys.modules['ai.common'].__path__ = []
     ai_cfg = types.ModuleType('ai.common.config')
     ai_cfg.Config = type('Config', (), {})
-    sys.modules.setdefault('ai.common.config', ai_cfg)
+    sys.modules['ai.common.config'] = ai_cfg
 
     # Synthetic package so IGlobal's `from . import openai_tts, elevenlabs_tts` resolves.
     pkg = types.ModuleType('cloud_tts')
     pkg.__path__ = [str(_DIR)]
     sys.modules['cloud_tts'] = pkg
-    for name in ('openai_tts', 'elevenlabs_tts', 'IGlobal'):
-        spec = importlib.util.spec_from_file_location(f'cloud_tts.{name}', _DIR / f'{name}.py')
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[f'cloud_tts.{name}'] = module
-        spec.loader.exec_module(module)
-    return sys.modules['cloud_tts.IGlobal']
+    try:
+        for name in ('openai_tts', 'elevenlabs_tts', 'IGlobal'):
+            spec = importlib.util.spec_from_file_location(f'cloud_tts.{name}', _DIR / f'{name}.py')
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[f'cloud_tts.{name}'] = module
+            spec.loader.exec_module(module)
+        return sys.modules['cloud_tts.IGlobal']
+    finally:
+        for name, mod in _saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
 
 
 _ig = _load_iglobal()

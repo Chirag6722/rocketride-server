@@ -15,6 +15,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo, useRef, type CSSProperties } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
+import type { PaymentWalletsOption } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { commonStyles } from '../../themes/styles';
 import { PlanPicker, planAmount } from './PlanPicker';
@@ -394,6 +395,11 @@ const PaymentForm: React.FC<PaymentFormProps> = ({ plan, subscriptionId, promo, 
 	const discounted = promo ? discountedCents(plan, promo) : null;
 	const payLabel = discounted !== null ? formatCents(discounted, plan.currency) : planAmount(plan);
 
+	// Stripe accepts `wallets.link: 'never'` at runtime, but stripe-js@5's
+	// PaymentWalletsOption omits the `link` key — widen the local option type
+	// (intersection stays assignable to PaymentWalletsOption) instead of casting.
+	const walletsOption: PaymentWalletsOption & { link?: 'auto' | 'never' } = { link: 'never' };
+
 	return (
 		<>
 			<button style={S.backBtn} onClick={onBack}>&#8592; Change plan</button>
@@ -417,7 +423,7 @@ const PaymentForm: React.FC<PaymentFormProps> = ({ plan, subscriptionId, promo, 
 			</div>
 
 			<form onSubmit={handleSubmit}>
-				<PaymentElement options={{ wallets: { link: 'never' } }} />
+				<PaymentElement options={{ wallets: walletsOption }} />
 				<button type="submit" disabled={!stripe || submitting} style={S.submitBtn(!stripe || submitting)}>
 					{submitting ? 'Processing\u2026' : `Subscribe \u2014 ${payLabel}`}
 				</button>
@@ -445,6 +451,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 	appDescription,
 	stripePublishableKey,
 	preselectedPlan,
+	preselectedPromo,
 	onFetchPlans,
 	onCreateCheckout,
 	onConfirmPending,
@@ -473,7 +480,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 	// ── Promo code state ─────────────────────────────────────────────────
 	const promoEnabled = Boolean(onValidatePromoCode);
 	const [promoInput, setPromoInput] = useState('');
-	const [appliedPromo, setAppliedPromo] = useState<PromoValidation | null>(null);
+	const [appliedPromo, setAppliedPromo] = useState<PromoValidation | null>(preselectedPromo ?? null);
 	const [promoBusy, setPromoBusy] = useState(false);
 	const [promoError, setPromoError] = useState<string | null>(null);
 	// Set after a grant/hackathon code redeems — renders the success block
@@ -630,10 +637,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
 	// ── Render ───────────────────────────────────────────────────────────
 	return (
-		<div
-			style={{ ...commonStyles.modalOverlay, fontFamily: 'var(--rr-font-family)' }}
-			onClick={(e) => e.target === e.currentTarget && onClose()}
-		>
+		/* Backdrop is inert: dismissal is deliberate-only (close button) per the
+		   2026-07-08 design decision — clicking outside must NOT close. */
+		<div style={{ ...commonStyles.modalOverlay, fontFamily: 'var(--rr-font-family)' }}>
 			<div style={S.modal}>
 				<button style={S.closeBtn} onClick={onClose} aria-label="Close">&times;</button>
 

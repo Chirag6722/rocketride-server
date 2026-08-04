@@ -34,7 +34,7 @@
 
 import type { ConnectResult, DAPMessage } from 'rocketride';
 import type { ConnectionStatus } from './connection';
-import type { CheckoutPlan } from '../modules/checkout/types';
+import type { CheckoutPlan, PromoValidation } from '../modules/checkout/types';
 
 // =============================================================================
 // APP ENTRY — minimal shape for app catalog events
@@ -44,8 +44,15 @@ import type { CheckoutPlan } from '../modules/checkout/types';
  * Minimal app entry shape shared across hosts for event payloads.
  *
  * Both shell-ui and VSCode emit `shell:appsUpdated` and `shell:subscribe`
- * with app entries. This captures the common fields; hosts cast to their
- * concrete type (e.g. shell-ui's `AppManifestEntry`) for full access.
+ * with app entries. This captures only the fields every host guarantees, so
+ * each host's richer concrete manifest type (shell-ui's `AppManifestEntry`
+ * and the SDK's `AppManifestEntry`) structurally satisfies it and can be
+ * passed directly without a cast. Consumers that need host-specific fields
+ * narrow to their concrete manifest type.
+ *
+ * Deliberately has NO index signature: an index signature would force
+ * interface-typed manifest values (interfaces get no implicit index
+ * signature) to be cast, which is exactly the divergence this shape unifies.
  */
 export interface ShellAppEntry {
 	/** Unique app identifier (e.g. 'rocketride.home'). */
@@ -54,8 +61,6 @@ export interface ShellAppEntry {
 	name: string;
 	/** Optional description. */
 	description?: string;
-	/** Additional properties vary by host. */
-	[key: string]: unknown;
 }
 
 // =============================================================================
@@ -185,8 +190,16 @@ export interface ShellConnectionEventMap {
 	 * Opens the CheckoutModal. The `app` field is the manifest entry. The
 	 * optional `plan` preselects a tier and skips the picker — going straight
 	 * to payment (used by the web pricing page); omit it to show the picker.
+	 * The optional `promo` carries a discount code already validated on the
+	 * pricing page, so the skipped-picker checkout still applies the discount.
 	 */
-	'shell:subscribe': { app: ShellAppEntry; plan?: CheckoutPlan };
+	'shell:subscribe': { app: ShellAppEntry; plan?: CheckoutPlan; promo?: PromoValidation | null };
+
+	/**
+	 * User cancelled a subscription for an app from the account/billing UI.
+	 * Consumers refresh their entitlement view for the given app.
+	 */
+	'shell:unsubscribe': { appId: string };
 
 	/** Navigate back to the My Apps launcher screen. */
 	'shell:myApps': Record<string, never>;
@@ -209,11 +222,12 @@ export interface ShellConnectionEventMap {
 	 */
 	'shell:themeChange': { tokens: Record<string, string> };
 
-	// ── App-defined events ───────────────────────────────────────────────
-	// Apps may emit their own events through the connection manager's event
-	// bus (e.g. 'home:browsingChange'). The index signature allows any
-	// string key so apps don't need to cast custom event names.
-	[key: string]: unknown;
+	/**
+	 * A view became the active/focused view in the workspace. Panels that
+	 * defer measurement or data fetches until visible listen for this to
+	 * (re)initialize when their tab is activated.
+	 */
+	'shell:viewActivated': { viewId: string };
 }
 
 // =============================================================================

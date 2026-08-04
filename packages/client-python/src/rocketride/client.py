@@ -48,6 +48,7 @@ from .account import AccountApi
 from .billing import BillingApi
 from .database import DatabaseApi
 from .deploy import DeployApi
+from .log import LogApi
 from .mixins.connection import ConnectionMixin
 from .mixins.execution import ExecutionMixin
 from .mixins.data import DataMixin
@@ -379,11 +380,16 @@ class RocketRideClient(
         """Deployment management operations (add, remove, list, status, update)."""
         return DeployApi(self)
 
+    @cached_property
+    def log(self) -> LogApi:
+        """Run-log continuum operations (chapters, ranged reads, delete)."""
+        return LogApi(self)
+
     # =========================================================================
     # TASK METHODS
     # =========================================================================
 
-    async def get_task_token(self, project_id: str, source: str) -> 'str | None':
+    async def get_task_token(self, project_id: str, source: str, *, team_id: str = '') -> 'str | None':
         """
         Resolve a running task's token from its project ID and source component.
 
@@ -391,14 +397,21 @@ class RocketRideClient(
         get_task_pipeline. Returns None if no task is currently running for
         the given project/source pair.
 
+        The scope IS the kind: pass ``team_id`` to resolve the team's
+        DEPLOYED run; omit it to resolve your own dev run.
+
         Args:
             project_id: The project identifier.
             source: The source component identifier.
+            team_id: Address the team's deploy run; empty for your own dev run.
 
         Returns:
             Task token string, or None if no matching task is running.
         """
-        body = await self.call('rrext_get_token', projectId=project_id, source=source)
+        args = {'projectId': project_id, 'source': source}
+        if team_id:
+            args['teamId'] = team_id
+        body = await self.call('rrext_get_token', **args)
         return body.get('token')
 
     async def get_task_pipeline(self, token: str) -> 'dict | None':

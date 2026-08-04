@@ -17,7 +17,7 @@ title: "MCP Server"
 <p align="center">
   <a href="https://pypi.org/project/rocketride-mcp/"><img src="https://img.shields.io/pypi/v/rocketride-mcp?color=222223&label=PyPI" alt="PyPI" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server"><img src="https://img.shields.io/github/stars/rocketride-org/rocketride-server?style=flat&color=238636&label=GitHub&logo=github&logoColor=white" alt="GitHub" /></a>
-  <a href="https://discord.gg/9hr3tdZmEG"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.gg/PMXrtenMsY"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server/blob/develop/LICENSE"><img src="https://img.shields.io/badge/License-MIT-41b6e6" alt="MIT License" /></a>
 </p>
 
@@ -233,15 +233,15 @@ In Claude Desktop or any MCP-compatible client, resources are listed automatical
 
 ```python
 # Example: read the pipeline list resource
-result = await session.read_resource("rocketride://pipelines")
+result = await session.read_resource('rocketride://pipelines')
 # Returns: {"pipelines": [{"name": "my-pipeline", "description": "..."}, ...]}
 
 # Example: check server status
-result = await session.read_resource("rocketride://status")
+result = await session.read_resource('rocketride://status')
 # Returns: {"connected": true, "pipeline_count": 3, "pipelines": ["pipe-a", "pipe-b", "pipe-c"]}
 
 # Example: list available node types
-result = await session.read_resource("rocketride://nodes")
+result = await session.read_resource('rocketride://nodes')
 # Returns: {"nodes": [{"name": "llm_openai", "type": "processor"}, ...]}
 ```
 
@@ -310,10 +310,9 @@ This generates the message: _"Evaluate the output quality of the RocketRide pipe
 prompts = await session.list_prompts()
 
 # Get a rendered prompt
-result = await session.get_prompt("analyze-document", arguments={
-    "pipeline": "my-pipeline",
-    "query": "Summarize the key findings"
-})
+result = await session.get_prompt(
+    'analyze-document', arguments={'pipeline': 'my-pipeline', 'query': 'Summarize the key findings'}
+)
 # result.messages[0].content.text contains the rendered message
 ```
 
@@ -345,7 +344,7 @@ Set these environment variables (required; no config file is used):
 
 - [Documentation](https://docs.rocketride.org/)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
-- [Discord](https://discord.gg/9hr3tdZmEG)
+- [Discord](https://discord.gg/PMXrtenMsY)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
 
 ## License

@@ -88,18 +88,9 @@ __all__ = ['WebServer', 'AccountInfo']
 #     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # ASCII art banner printed to stdout when the server starts (serve() only).
-logo = r"""
-        _____            _        _   _____  _     _
-       |  __ \          | |      | | |  __ \(_)   | |
-       | |__) |___   ___| | _____| |_| |__) |_  __| | ___
-       |  _  // _ \ / __| |/ / _ \ __|  _  /| |/ _` |/ _ \
-       | | \ \ (_) | (__|   <  __/ |_| | \ \| | (_| |  __/
-       |_|  \_\___/ \___|_|\_\___|\__|_|  \_\_|\__,_|\___|
-
-
-            Copyright (c) 2026 Aparavi Software AG
-                    All rights reserved
-    """
+# Shared definition: the task node prints the same art at launch so the run
+# log's console opens with it.
+from ai.logo import LOGO as logo
 
 
 def _is_restorable_signal_handler(handler: Any) -> bool:
@@ -313,11 +304,13 @@ class WebServer:
             self.add_route('/use', use, ['POST'])
             self.add_route('/shutdown', shutdown, ['POST'])
             self.add_route('/auth/callback', auth_callback, ['GET'], public=True)
-            self.add_route('/auth/vscode/google', vscode_oauth_bounce, ['GET'], public=True)
 
         # These are always there - no way to turn them off
         self.add_route('/status', status, ['GET'])
         self.add_route('/version', version, ['GET'], public=True)
+        # OAuth bounce endpoints must stay registered even when standardEndpoints
+        # is off (cloud/eaas), else the Gmail-tool Google OAuth deep-link 401s.
+        self.add_route('/auth/vscode/google', vscode_oauth_bounce, ['GET'], public=True)
 
         # Configure the Uvicorn server immediately upon initialization
         self.server = self._configure_server()

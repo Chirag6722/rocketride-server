@@ -14,7 +14,7 @@ sidebar_position: 1
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=RocketRide.rocketride"><img src="https://img.shields.io/visual-studio-marketplace/v/RocketRide.rocketride?color=222223&label=Marketplace" alt="VS Code Marketplace" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server"><img src="https://img.shields.io/github/stars/rocketride-org/rocketride-server?style=flat&color=238636&label=GitHub&logo=github&logoColor=white" alt="GitHub" /></a>
-  <a href="https://discord.gg/9hr3tdZmEG"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.gg/PMXrtenMsY"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server/blob/develop/LICENSE"><img src="https://img.shields.io/badge/License-MIT-41b6e6" alt="MIT License" /></a>
 </p>
 
@@ -60,7 +60,8 @@ Need inspiration? Check out [awesome-rocketride](https://github.com/rocketride-o
 | `rocketride.hostUrl`                 | `string`   | `"http://localhost:5565"`        | Host URL for RocketRide service. Host and port will be parsed from this URL.                                                              |
 | `rocketride.defaultPipelinePath`     | `string`   | `"${workspaceFolder}/pipelines"` | Default directory path for creating new pipeline files                                                                                    |
 | `rocketride.local.engineVersion`     | `string`   | `"latest"`                       | Engine version to download. `"latest"` for newest stable, `"prerelease"` for newest prerelease, or a specific tag like `"server-v3.1.1"`. |
-| `rocketride.engineArgs`              | `string[]` | `[]`                             | Additional arguments passed to the engine subprocess                                                                                      |
+| `rocketride.taskArguments`           | `string`   | `""`                             | Additional command-line arguments passed to each pipeline task                                                                            |
+| `rocketride.pipelineDebugOutput`     | `boolean`  | `false`                          | Enable full debug output for pipeline tasks (`--trace=debugOut`)                                                                          |
 | `rocketride.pipelineRestartBehavior` | `string`   | `"prompt"`                       | Behavior when a `.pipe` file changes while the pipeline is running: `"auto"`, `"manual"`, or `"prompt"`                                   |
 | `rocketride.integrations.copilot`    | `boolean`  | `false`                          | Enable RocketRide integration with GitHub Copilot                                                                                         |
 | `rocketride.integrations.claudeCode` | `boolean`  | `false`                          | Enable RocketRide integration with Claude Code                                                                                            |
@@ -85,7 +86,7 @@ Need inspiration? Check out [awesome-rocketride](https://github.com/rocketride-o
 ## Links
 
 - [Documentation](https://docs.rocketride.org/)
-- [Discord](https://discord.gg/9hr3tdZmEG)
+- [Discord](https://discord.gg/PMXrtenMsY)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
 - [Security](https://github.com/rocketride-org/rocketride-server/blob/develop/SECURITY.md)

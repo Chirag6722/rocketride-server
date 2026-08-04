@@ -280,11 +280,8 @@ export class SettingsProvider {
 				hostUrl: config.development.hostUrl,
 				hasApiKey: hasApiKey,
 				apiKey: apiKey,
-				teamId: config.development.teamId,
 				local: {
 					engineVersion: config.development.local.engineVersion,
-					debugOutput: config.development.local.debugOutput,
-					engineArgs: config.development.local.engineArgs,
 				},
 			},
 			deployment: {
@@ -292,17 +289,18 @@ export class SettingsProvider {
 				hostUrl: config.deployment.hostUrl,
 				hasApiKey: !!config.deployment.apiKey,
 				apiKey: config.deployment.apiKey || '',
-				teamId: config.deployment.teamId,
 				local: {
 					engineVersion: config.deployment.local.engineVersion,
-					debugOutput: config.deployment.local.debugOutput,
-					engineArgs: config.deployment.local.engineArgs,
 				},
 			},
 
 			// Top-level settings
 			defaultPipelinePath: config.defaultPipelinePath,
 			pipelineRestartBehavior: config.pipelineRestartBehavior,
+			pipelineTtl: config.pipelineTtl,
+			pipelineTraceLevel: config.pipelineTraceLevel,
+			taskArguments: config.taskArguments,
+			pipelineDebugOutput: config.pipelineDebugOutput,
 
 			// Integration settings
 			autoAgentIntegration: workspaceConfig.get('integrations.autoAgentIntegration', true),
@@ -322,8 +320,6 @@ export class SettingsProvider {
 			settings: allSettings,
 			isSubscribed: isSubscribed(client, PIPE_BUILDER_APP_ID),
 		});
-
-		// Teams are fetched by CloudPanel after it confirms the server is SaaS
 	}
 
 	/**
@@ -341,16 +337,6 @@ export class SettingsProvider {
 		try {
 			// Cast to the typed snapshot (webview sends the full SettingsData shape)
 			const snapshot = settings as unknown as SettingsSnapshot;
-
-			// Validate: cloud mode requires a team selection
-			if (snapshot.development.connectionMode === 'cloud' && !snapshot.development.teamId) {
-				this.showMessage(webview, 'error', 'Please select a team for the development cloud connection.');
-				return;
-			}
-			if (snapshot.deployment.connectionMode === 'cloud' && !snapshot.deployment.teamId) {
-				this.showMessage(webview, 'error', 'Please select a team for the deployment cloud connection.');
-				return;
-			}
 
 			// Step 1: Write everything atomically — ConfigManager suppresses all
 			// intermediate config-change listeners during the batch so no CM reacts

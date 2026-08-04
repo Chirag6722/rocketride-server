@@ -14,7 +14,7 @@ title: Python
 <p align="center">
   <a href="https://pypi.org/project/rocketride/"><img src="https://img.shields.io/pypi/v/rocketride?color=222223&label=PyPI" alt="PyPI" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server"><img src="https://img.shields.io/github/stars/rocketride-org/rocketride-server?style=flat&color=238636&label=GitHub&logo=github&logoColor=white" alt="GitHub" /></a>
-  <a href="https://discord.gg/9hr3tdZmEG"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://discord.gg/PMXrtenMsY"><img src="https://img.shields.io/badge/Discord-Join-370b7a?logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://github.com/rocketride-org/rocketride-server/blob/develop/LICENSE"><img src="https://img.shields.io/badge/License-MIT-41b6e6" alt="MIT License" /></a>
 </p>
 
@@ -28,13 +28,15 @@ pip install rocketride
 import asyncio
 from rocketride import RocketRideClient
 
+
 async def main():
-    async with RocketRideClient(uri="https://cloud.rocketride.ai", auth="my-key") as client:
-        result = await client.use(filepath="pipeline.pipe")
-        token = result["token"]
-        out = await client.send(token, "Hello, pipeline!", objinfo={"name": "input.txt"}, mimetype="text/plain")
+    async with RocketRideClient(uri='https://cloud.rocketride.ai', auth='my-key') as client:
+        result = await client.use(filepath='pipeline.pipe')
+        token = result['token']
+        out = await client.send(token, 'Hello, pipeline!', objinfo={'name': 'input.txt'}, mimetype='text/plain')
         print(out)
         await client.terminate(token)
+
 
 asyncio.run(main())
 ```
@@ -73,6 +75,7 @@ You build your `.pipe` - and you run it against the fastest AI runtime available
 - **Project storage** - Save, retrieve, and version-control pipelines on the server
 - **Async-first** - Built on `asyncio` and `websockets`; supports `async with` context manager
 - **CLI included** - Manage pipelines from the command line
+- **Telemetry reporting** - The shared loose `report()` core via `rocketride.analytics`; each app owns its own event taxonomy ([Analytics / Telemetry Reporting](/develop/python/analytics))
 
 ---
 
@@ -123,11 +126,11 @@ Raises `ValueError` if both `uri` and `ROCKETRIDE_URI` are empty or if `auth` is
 
 ```python
 client = RocketRideClient(
-    uri="https://cloud.rocketride.ai",
-    auth="my-key",
+    uri='https://cloud.rocketride.ai',
+    auth='my-key',
     persist=True,
     max_retry_time=300000,
-    on_connect_error=lambda msg: print("Connect error:", msg),
+    on_connect_error=lambda msg: print('Connect error:', msg),
     on_event=handle_event,
 )
 ```
@@ -144,10 +147,20 @@ client = RocketRideClient(
 **Example:**
 
 ```python
-async with RocketRideClient(uri="wss://cloud.rocketride.ai", auth=os.environ["ROCKETRIDE_APIKEY"]) as client:
-    result = await client.use(filepath="pipeline.json")
-    token = result["token"]
-    await client.send(token, "Hello, pipeline!")
+import asyncio
+import os
+
+from rocketride import RocketRideClient
+
+
+async def main():
+    async with RocketRideClient(uri='wss://cloud.rocketride.ai', auth=os.environ['ROCKETRIDE_APIKEY']) as client:
+        result = await client.use(filepath='pipeline.json')
+        token = result['token']
+        await client.send(token, 'Hello, pipeline!')
+
+
+asyncio.run(main())
 ```
 
 ### Connection
@@ -174,14 +187,14 @@ async with RocketRideClient(uri="wss://cloud.rocketride.ai", auth=os.environ["RO
 
 ```python
 # Two-step (build then request)
-req = client.build_request("rrext_monitor", token=token, arguments={"types": ["apaevt_status_upload"]})
+req = client.build_request('rrext_monitor', token=token, arguments={'types': ['apaevt_status_upload']})
 res = await client.request(req, timeout=5000)
 
 # One-step with dap_request
-res = await client.dap_request("rrext_services", {}, timeout=5000)
+res = await client.dap_request('rrext_services', {}, timeout=5000)
 
 if client.did_fail(res):
-    raise RuntimeError(res.get("message", "Request failed"))
+    raise RuntimeError(res.get('message', 'Request failed'))
 ```
 
 ### Pipeline execution
@@ -207,13 +220,13 @@ if client.did_fail(res):
 **Example - send a string:**
 
 ```python
-result = await client.send(token, "Hello, pipeline!", objinfo={"name": "greeting.txt"}, mimetype="text/plain")
+result = await client.send(token, 'Hello, pipeline!', objinfo={'name': 'greeting.txt'}, mimetype='text/plain')
 ```
 
 **Example - stream with a pipe:**
 
 ```python
-pipe = await client.pipe(token, mime_type="application/json")
+pipe = await client.pipe(token, mime_type='application/json')
 await pipe.open()
 await pipe.write(b'{"key": "value1"}')
 await pipe.write(b'{"key": "value2"}')
@@ -263,31 +276,31 @@ Read, write, and manage files in your account's server-side store. All paths are
 
 ```python
 # Strings and JSON (wrappers manage the handle for you)
-await client.fs_write_string("notes/todo.txt", "buy milk")
-text = await client.fs_read_string("notes/todo.txt")
-await client.fs_write_json("config/app.json", {"debug": True})
-cfg = await client.fs_read_json("config/app.json")
+await client.fs_write_string('notes/todo.txt', 'buy milk')
+text = await client.fs_read_string('notes/todo.txt')
+await client.fs_write_json('config/app.json', {'debug': True})
+cfg = await client.fs_read_json('config/app.json')
 
 # Browse and inspect
-listing = await client.fs_list_dir("reports")
-for entry in listing["entries"]:
-    print(entry["name"], entry["type"])
+listing = await client.fs_list_dir('reports')
+for entry in listing['entries']:
+    print(entry['name'], entry['type'])
 
 # Streaming binary upload via a write handle (4 MB chunks)
-info = await client.fs_open("uploads/video.mp4", "w")
-handle = info["handle"]
+info = await client.fs_open('uploads/video.mp4', 'w')
+handle = info['handle']
 try:
-    with open("video.mp4", "rb") as f:
+    with open('video.mp4', 'rb') as f:
         while chunk := f.read(4_194_304):
             await client.fs_write(handle, chunk)
 finally:
-    await client.fs_close(handle, "w")
+    await client.fs_close(handle, 'w')
 
 # Inline URL for streaming in a browser (<video>/<img> src)
-stream_url = await client.fs_get_url("uploads/video.mp4", expires_in=600)
+stream_url = await client.fs_get_url('uploads/video.mp4', expires_in=600)
 
 # Force a download with a friendly filename (works cross-origin on S3/Azure too)
-download_url = await client.fs_get_url("uploads/video.mp4", download_name="my video.mp4")
+download_url = await client.fs_get_url('uploads/video.mp4', download_name='my video.mp4')
 ```
 
 ### Events
@@ -315,26 +328,49 @@ download_url = await client.fs_get_url("uploads/video.mp4", download_name="my vi
 
 ### Deploy
 
-Accessed via `client.deploy`. A deployment persists a pipeline on the server and runs it on a cron schedule (or on demand with `"manual"`), outliving the client connection. Each deployment is identified by its pipeline's `project_id`.
+Accessed via `client.deploy`. Teams-as-environments deployments: `publish`
+snapshots a pipeline as an **immutable, sha256-locked artifact version** in
+the org registry; `deploy` points a **team** (the environment — Staging,
+Production, ...) at a version. Promotion and rollback are the same pointer
+move. Deploy targets are always explicit — there is no default-team
+fallback. Every publish and pointer change lands in an immutable audit
+history.
 
-| Method          | Signature                                                                                                          | Returns                  | Description                                                                                                                |
-| --------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `deploy.add`    | `async def add(self, pipeline: PipelineConfig, *, schedule: str \| None = None) -> DeploymentRecord`               | `DeploymentRecord`       | Persists the pipeline as a deployment and activates it. `schedule`: 5-field cron (`"*/15 * * * *"`), preset (`@hourly`, `@daily`, …), or `"manual"` (default). |
-| `deploy.remove` | `async def remove(self, project_id: str) -> None`                                                                  | -                        | Undeploys and removes the deployment.                                                                                        |
-| `deploy.list`   | `async def list(self) -> list[DeploymentRecord]`                                                                   | `list[DeploymentRecord]` | Returns the authenticated user's deployments.                                                                                |
-| `deploy.status` | `async def status(self, project_id: str) -> DeploymentRecord`                                                      | `DeploymentRecord`       | Gets one deployment record.                                                                                                  |
-| `deploy.update` | `async def update(self, project_id: str, *, pipeline: PipelineConfig \| None = None, schedule: str \| None = None) -> None` | -                        | Replaces the pipeline and/or schedule; omitted parameters stay unchanged.                                                    |
+| Method                | Signature                                                                                                       | Returns                | Description                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `deploy.publish`      | `async def publish(self, pipeline, *, comment=None, deploy_to=None) -> PublishResult`                            | `PublishResult`        | Snapshots the pipeline as the next registry version. `deploy_to` also points that team at it (one-step).           |
+| `deploy.deploy`       | `async def deploy(self, project_id, version, team_id) -> Deployment`                                             | `Deployment`           | Points the team at a published version — promotion and rollback alike.                                              |
+| `deploy.list`         | `async def list(self, *, team_id=None, page=None, page_size=None, search=None, filters=None, sort=None)`         | `DeployListResult`     | Deployments visible to the caller, standard `{rows, total, page, pageSize}` envelope.                              |
+| `deploy.get`          | `async def get(self, project_id, team_id) -> Deployment`                                                         | `Deployment`           | One team's deployment, registry-joined.                                                                             |
+| `deploy.versions`     | `async def versions(self, project_id, *, page=None, ...) -> DeployVersionsResult`                                | `DeployVersionsResult` | The registry versions (the version strip), newest first, standard envelope.                                         |
+| `deploy.history`      | `async def history(self, project_id, *, team_id=None, page=None, ...) -> DeployHistoryResult`                    | `DeployHistoryResult`  | The immutable audit trail, newest first; rows carry `seq` (the stable append-order identity). Server-paged.        |
+| `deploy.disable`      | `async def disable(self, project_id, team_id) -> Deployment`                                                     | `Deployment`           | Disables the team deployment — the kill switch: nothing runs until enabled again.                                   |
+| `deploy.enable`       | `async def enable(self, project_id, team_id) -> Deployment`                                                      | `Deployment`           | Enables a disabled team deployment.                                                                                 |
+| `deploy.remove`       | `async def remove(self, project_id, team_id) -> Deployment`                                                      | `Deployment`           | Soft remove: hidden from listings; history and artifacts survive forever. Re-deploying revives it.                  |
+| `deploy.set_schedule` | `async def set_schedule(self, project_id, source_id, schedule, team_id, *, ttl=None) -> Deployment`              | `Deployment`           | Sets (or clears with `None`/`'manual'`) one source's 5-field cron schedule; the paused flag is untouched.           |
+| `deploy.pause_schedule` | `async def pause_schedule(self, project_id, source_id, team_id) -> Deployment`                                 | `Deployment`           | Pauses ONE source's schedule — cron/ttl kept, it just stops firing.                                                 |
+| `deploy.resume_schedule` | `async def resume_schedule(self, project_id, source_id, team_id) -> Deployment`                               | `Deployment`           | Resumes a paused source schedule.                                                                                   |
+| `deploy.preview`      | `async def preview(self, schedule, count=None) -> SchedulePreview`                                               | `SchedulePreview`      | THE single cron evaluator: validity + next occurrences. Never parse cron client-side.                               |
 
-**States:** `state` is `'active'` (scheduled runs fire per cron), `'paused'`, or `'errored'` — scheduled runs could no longer authenticate (e.g. the owner's API key was revoked) and have stopped; remove and re-add the deployment to resume. If a scheduled run is still in progress when the next tick comes due, that tick is skipped — runs of the same deployment never overlap.
+**States:** `state` is `'enabled'` (schedules fire per cron), `'disabled'` (the kill switch),
+`'errored'` (a scheduled dispatch failed on permissions and the scheduler
+stopped retrying), or `'removed'` (soft delete). Scheduled runs execute AS
+THE TEAM (no stored user credential); their logs land in the team's run-log
+continuum, readable by teammates via `client.log` with `team_id`.
 
 **Example:**
 
 ```python
-record = await client.deploy.add(my_pipeline, schedule="*/15 * * * *")
-for rec in await client.deploy.list():
-    print(rec["pipeline"]["project_id"], rec["schedule"], rec["state"])
-await client.deploy.update(project_id, schedule="manual")  # pause scheduled runs
-await client.deploy.remove(project_id)
+result = await client.deploy.publish(my_pipeline, comment='v2 prompt fix')
+await client.deploy.deploy('proj-1', result['artifact']['version'], 'team-staging')
+await client.deploy.set_schedule('proj-1', 'webhook_1', '*/15 * * * *', 'team-staging')
+
+# Promote the same version to Production later — the identical gesture.
+await client.deploy.deploy('proj-1', result['artifact']['version'], 'team-prod')
+
+live = await client.deploy.list()
+for dep in live['rows']:
+    print(dep['teamId'], dep['projectId'], 'v', dep['version'], dep['state'])
 ```
 
 ---
@@ -410,7 +446,10 @@ From `rocketride.schema`. Used to parse chat response content. The client does n
 - **TASK_STATUS**: Task status with `completedCount`, `totalCount`, `completed`, `state`, `exitCode`, and many more fields.
 - **DAPMessage**: Dict with `type`, `seq`, and optional `command`, `arguments`, `body`, `success`, `message`, `event`, `token`, etc.
 - **PipelineConfig**: Pipeline definition with `name`, `description`, `version`, `components`, `source`, `project_id`.
-- **DeploymentRecord**: TypedDict with `pipeline`, `schedule`, `state` (`'active' | 'paused' | 'errored'`), `userId`, `createdAt`, `updatedAt` (Unix seconds).
+- **DeployArtifact**: one immutable registry version — `version`, `sha256`, `bytes`, `pipelineName`, `publishedBy`, `publishedAt`, `comment`.
+- **Deployment**: one team's deployment, registry-joined — `teamId`, `projectId`, `version`, `state` (`'enabled' | 'disabled' | 'errored' | 'removed'`), `schedules`, actor/timestamp fields.
+- **DeployHistoryEntry**: one audit row — `seq` (stable append-order identity), `at`, `action`, `teamId`, `version`, `actor`.
+- **PublishResult / DeployListResult / DeployVersionsResult / DeployHistoryResult / SchedulePreview**: method result shapes (list results are the standard `{rows, total, page, pageSize}` envelope).
 - **QuestionHistory**: `{ 'role': str, 'content': str }`.
 - **QuestionInstruction**: `{ 'subtitle': str, 'instructions': str }`.
 - **QuestionExample**: `{ 'given': str, 'result': str }`.
@@ -443,14 +482,14 @@ from rocketride.core.exceptions import PipeException, ExecutionException
 
 try:
     async with RocketRideClient(uri=uri, auth=auth) as client:
-        result = await client.use(filepath="pipeline.json")
-        await client.send(result["token"], data)
+        result = await client.use(filepath='pipeline.json')
+        await client.send(result['token'], data)
 except AuthenticationException:
-    print("Bad credentials")
+    print('Bad credentials')
 except ExecutionException as e:
-    print(f"Pipeline failed: {e}")
+    print(f'Pipeline failed: {e}')
 except PipeException as e:
-    print(f"Data transfer error: {e}")
+    print(f'Data transfer error: {e}')
 ```
 
 ---
@@ -463,15 +502,17 @@ except PipeException as e:
 import asyncio
 from rocketride import RocketRideClient
 
+
 async def main():
-    client = RocketRideClient(uri="https://cloud.rocketride.ai", auth="my-key")
+    client = RocketRideClient(uri='https://cloud.rocketride.ai', auth='my-key')
     await client.connect()
-    result = await client.use(filepath="pipeline.json")
-    token = result["token"]
-    out = await client.send(token, "Hello, pipeline!", objinfo={"name": "input.txt"}, mimetype="text/plain")
+    result = await client.use(filepath='pipeline.json')
+    token = result['token']
+    out = await client.send(token, 'Hello, pipeline!', objinfo={'name': 'input.txt'}, mimetype='text/plain')
     print(out)
     await client.terminate(token)
     await client.disconnect()
+
 
 asyncio.run(main())
 ```
@@ -482,14 +523,16 @@ asyncio.run(main())
 import asyncio
 from rocketride import RocketRideClient
 
+
 async def main():
-    async with RocketRideClient(uri="wss://cloud.rocketride.ai", auth="my-key") as client:
-        result = await client.use(pipeline={"pipeline": my_pipeline_config})
-        token = result["token"]
+    async with RocketRideClient(uri='wss://cloud.rocketride.ai', auth='my-key') as client:
+        result = await client.use(pipeline={'pipeline': my_pipeline_config})
+        token = result['token']
         await client.send(token, '{"data": 1}')
         status = await client.get_task_status(token)
         print(status)
         await client.terminate(token)
+
 
 asyncio.run(main())
 ```
@@ -500,19 +543,21 @@ asyncio.run(main())
 import asyncio
 from rocketride import RocketRideClient
 
+
 async def main():
     client = RocketRideClient(
-        uri="https://cloud.rocketride.ai",
-        auth="my-key",
+        uri='https://cloud.rocketride.ai',
+        auth='my-key',
         persist=True,
         max_retry_time=300000,
-        on_connected=lambda info: print("Connected:", info),
-        on_disconnected=lambda reason, has_error: print("Disconnected:", reason, has_error),
-        on_connect_error=lambda msg: print("Connect error:", msg),
-        on_event=lambda e: print(e.get("event"), e.get("body")),
+        on_connected=lambda info: print('Connected:', info),
+        on_disconnected=lambda reason, has_error: print('Disconnected:', reason, has_error),
+        on_connect_error=lambda msg: print('Connect error:', msg),
+        on_event=lambda e: print(e.get('event'), e.get('body')),
     )
     await client.connect()
     # Later: use(), send_files(), etc. If connection drops, client retries; do not call disconnect() in on_disconnected.
+
 
 asyncio.run(main())
 ```
@@ -524,29 +569,31 @@ import asyncio
 from pathlib import Path
 from rocketride import RocketRideClient
 
-async def main():
-    client = RocketRideClient(uri="https://cloud.rocketride.ai", auth="my-key")
-    await client.connect()
-    result = await client.use(filepath="vectorize.json")
-    token = result["token"]
-    await client.set_events(token, ["apaevt_status_upload", "apaevt_status_processing"])
 
-    files = ["doc1.md", "doc2.md", ("doc3.json", {"tag": "export"}, "application/json")]
+async def main():
+    client = RocketRideClient(uri='https://cloud.rocketride.ai', auth='my-key')
+    await client.connect()
+    result = await client.use(filepath='vectorize.json')
+    token = result['token']
+    await client.set_events(token, ['apaevt_status_upload', 'apaevt_status_processing'])
+
+    files = ['doc1.md', 'doc2.md', ('doc3.json', {'tag': 'export'}, 'application/json')]
     upload_results = await client.send_files(files, token)
     for r in upload_results:
-        if r["action"] == "complete":
-            print("OK", r["filepath"])
+        if r['action'] == 'complete':
+            print('OK', r['filepath'])
         else:
-            print("Failed", r["filepath"], r.get("error"))
+            print('Failed', r['filepath'], r.get('error'))
 
     while True:
         status = await client.get_task_status(token)
-        print(f"Progress: {status.get('completedCount', 0)}/{status.get('totalCount', 0)}")
-        if status.get("completed"):
+        print(f'Progress: {status.get("completedCount", 0)}/{status.get("totalCount", 0)}')
+        if status.get('completed'):
             break
         await asyncio.sleep(2)
     await client.terminate(token)
     await client.disconnect()
+
 
 asyncio.run(main())
 ```
@@ -557,13 +604,14 @@ asyncio.run(main())
 import asyncio
 from rocketride import RocketRideClient
 
+
 async def main():
-    async with RocketRideClient(uri="https://cloud.rocketride.ai", auth="my-key") as client:
-        result = await client.use(filepath="ingest.json")
-        token = result["token"]
-        pipe = await client.pipe(token, objinfo={"name": "large.csv"}, mime_type="text/csv")
+    async with RocketRideClient(uri='https://cloud.rocketride.ai', auth='my-key') as client:
+        result = await client.use(filepath='ingest.json')
+        token = result['token']
+        pipe = await client.pipe(token, objinfo={'name': 'large.csv'}, mime_type='text/csv')
         await pipe.open()
-        with open("large.csv", "rb") as f:
+        with open('large.csv', 'rb') as f:
             while True:
                 chunk = f.read(64 * 1024)
                 if not chunk:
@@ -572,6 +620,7 @@ async def main():
         result = await pipe.close()
         print(result)
         await client.terminate(token)
+
 
 asyncio.run(main())
 ```
@@ -583,19 +632,21 @@ import asyncio
 from rocketride import RocketRideClient
 from rocketride.schema import Question, Answer
 
+
 async def main():
-    async with RocketRideClient(uri="https://cloud.rocketride.ai", auth="my-key") as client:
-        result = await client.use(filepath="chat_pipeline.json")
-        token = result["token"]
+    async with RocketRideClient(uri='https://cloud.rocketride.ai', auth='my-key') as client:
+        result = await client.use(filepath='chat_pipeline.json')
+        token = result['token']
         question = Question(expectJson=True)
-        question.addInstruction("Format", "Return a JSON object with keys: summary, keywords.")
-        question.addExample("Summarize X", {"summary": "...", "keywords": ["a", "b"]})
-        question.addQuestion("Summarize the main points and list keywords.")
+        question.addInstruction('Format', 'Return a JSON object with keys: summary, keywords.')
+        question.addExample('Summarize X', {'summary': '...', 'keywords': ['a', 'b']})
+        question.addQuestion('Summarize the main points and list keywords.')
         response = await client.chat(token=token, question=question)
-        answer_text = response.get("data", {}).get("answer") or (response.get("answers") or [None])[0]
+        answer_text = response.get('data', {}).get('answer') or (response.get('answers') or [None])[0]
         structured = Answer().parseJson(answer_text) if answer_text else None
         print(structured)
         await client.terminate(token)
+
 
 asyncio.run(main())
 ```
@@ -606,19 +657,21 @@ asyncio.run(main())
 import asyncio
 from rocketride import RocketRideClient
 
+
 async def main():
-    client = RocketRideClient(uri="https://cloud.rocketride.ai", auth="my-key")
+    client = RocketRideClient(uri='https://cloud.rocketride.ai', auth='my-key')
     await client.connect()
     services = await client.get_services()
-    print("Available:", list(services.keys()))
-    ocr = await client.get_service("ocr")
+    print('Available:', list(services.keys()))
+    ocr = await client.get_service('ocr')
     if ocr:
-        print("OCR schema:", ocr.get("schema"))
-    req = client.build_request("rrext_ping", token=my_token)
+        print('OCR schema:', ocr.get('schema'))
+    req = client.build_request('rrext_ping', token=my_token)
     res = await client.request(req, timeout=5000)
     if client.did_fail(res):
-        raise RuntimeError(res.get("message", "Ping failed"))
+        raise RuntimeError(res.get('message', 'Ping failed'))
     await client.disconnect()
+
 
 asyncio.run(main())
 ```
@@ -652,7 +705,7 @@ All commands accept `--uri` and `--apikey` flags, or read from environment varia
 
 - [Documentation](https://docs.rocketride.org/)
 - [GitHub](https://github.com/rocketride-org/rocketride-server)
-- [Discord](https://discord.gg/9hr3tdZmEG)
+- [Discord](https://discord.gg/PMXrtenMsY)
 - [Contributing](https://github.com/rocketride-org/rocketride-server/blob/develop/CONTRIBUTING.md)
 
 ## License
