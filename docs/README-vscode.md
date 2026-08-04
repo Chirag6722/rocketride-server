@@ -17,7 +17,7 @@
 
 1. Install the **RocketRide** extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=RocketRide.rocketride) or [Open VSX](https://open-vsx.org/extension/RocketRide/rocketride)
 2. Click the **RocketRide** icon in the Activity Bar
-3. Pick how to run the engine when prompted: **Local** (recommended, downloads and runs on your machine with no extra setup), Docker, an on-premises server, or [RocketRide Cloud](https://cloud.rocketride.ai/)
+3. Pick how to run the engine when prompted: **Local** (recommended, downloads and runs on your machine with no extra setup; on Linux see the runtime library note below), Docker, an on-premises server, or [RocketRide Cloud](https://cloud.rocketride.ai/)
 4. Create a `.pipe` file: it opens automatically in the visual canvas builder
 5. Wire up nodes by connecting input and output lanes, then hit **Play** to run
 

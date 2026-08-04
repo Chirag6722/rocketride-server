@@ -357,7 +357,7 @@ From `rocketride.schema`. Used to parse chat response content. The client does n
 | ------------- | -------------------------------------- | ---------------------------------------------------------------- |
 | `setAnswer`   | `setAnswer(self, value: str \| dict \| list)` | Sets the answer value. With `expectJson=True`, strings are parsed as JSON; raises `ValueError` if not valid JSON. |
 | `getText`     | `getText(self) -> str`                 | Get the answer as plain text.                                    |
-| `getJson`     | `getJson(self) -> Optional[dict]`      | Get the answer as parsed JSON. Returns `None` if there is no answer; raises `ValueError` if the text is not valid JSON. |
+| `getJson`     | `getJson(self) -> Optional[dict \| list]` | Get the answer as parsed JSON (a dict or a list). Returns `None` if there is no answer; raises `ValueError` if the text is not valid JSON. |
 | `isJson`      | `isJson(self) -> bool`                 | Whether this answer is expected to be JSON (returns the `expectJson` flag). |
 | `parsePython` | `parsePython(self, value: str) -> Any` | Extracts Python code from a code block in the response.          |
 
@@ -442,6 +442,17 @@ asyncio.run(main())
 ```python
 import asyncio
 from rocketride import RocketRideClient
+
+# The minimal webhook pipeline from the Quick Start above, as a Python dict
+my_pipeline_config = {
+    'components': [
+        {'id': 'webhook_1', 'provider': 'webhook', 'config': {'hideForm': True, 'mode': 'Source', 'parameters': {}, 'type': 'webhook'}},
+        {'id': 'response_text_1', 'provider': 'response_text', 'config': {'laneName': 'text'}, 'input': [{'lane': 'text', 'from': 'webhook_1'}]},
+    ],
+    'project_id': 'quickstart',
+    'viewport': {'x': 0, 'y': 0, 'zoom': 1},
+    'version': 1,
+}
 
 
 async def main():

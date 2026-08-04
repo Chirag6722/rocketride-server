@@ -63,7 +63,7 @@ Then build real pipelines visually: visit [RocketRide on GitHub](https://github.
 
 ## What is RocketRide?
 
-[RocketRide](https://rocketride.org) is an open source, developer-native AI pipeline platform.
+[RocketRide](https://rocketride.org) is an open-source, developer-native AI pipeline platform.
 It lets you build, debug, and deploy production AI workflows without leaving your IDE,
 using a visual drag-and-drop canvas or code-first with TypeScript and Python SDKs.
 
