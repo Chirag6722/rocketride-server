@@ -206,8 +206,11 @@ class Reader(ReaderBase):
         Returns:
             Image as PNG bytes
         """
-        if isinstance(image_data, bytes):
-            return image_data
+        # bytearray/memoryview are the accumulator types used by the AVI image lane;
+        # they are not instances of bytes, so match them explicitly rather than
+        # letting them fall through to the stringify fallback below.
+        if isinstance(image_data, (bytes, bytearray, memoryview)):
+            return bytes(image_data)
 
         if isinstance(image_data, np.ndarray):
             # Handle grayscale images
