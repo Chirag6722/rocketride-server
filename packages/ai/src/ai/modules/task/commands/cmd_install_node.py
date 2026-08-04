@@ -97,6 +97,35 @@ class InstallNodeCommands(DAPConn):
             self.debug_message(f'rrext_install_node failed: {e}')
             raise
 
+    async def on_rrext_uninstall_node(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Uninstall a previously-installed node capsule for the authenticated caller.
+
+        Arguments (in ``request['arguments']``):
+            node (str): the installed node's name (its ``local_nodes/<name>/`` dir).
+
+        Removes the node's dir from the caller's store. The catalog overlay re-reads
+        the store on the next ``rrext_services``, so the node then disappears — no
+        cache to invalidate. Returns {'ok': True, 'uninstalled': <name>} or
+        {'ok': False, 'error': <why>}.
+        """
+        args = request.get('arguments') or {}
+        name = str(args.get('node') or '').strip()
+        # Confine the delete to a single dir directly under local_nodes/: reject
+        # empty, path separators and dot segments so it can never escape the root.
+        if not name or '/' in name or '\\' in name or name in ('.', '..'):
+            return self.build_response(request, body={'ok': False, 'error': 'invalid node name'})
+        try:
+            from ai.account import Store
+
+            fs = Store.file_store(self.request_context())
+            await fs.rmdir(f'{STORE_NODES_ROOT}/{name}', recursive=True)
+            self.debug_message(f'Uninstalled node capsule {name!r}')
+            return self.build_response(request, body={'ok': True, 'uninstalled': name})
+        except Exception as e:
+            self.debug_message(f'rrext_uninstall_node failed: {e}')
+            return self.build_response(request, body={'ok': False, 'error': str(e)})
+
     # -------------------------------------------------------------------------
 
     async def _resolve_capsule_bytes(self, args: Dict[str, Any]) -> bytes:

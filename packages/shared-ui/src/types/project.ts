@@ -182,6 +182,9 @@ export interface IService {
 	/** Icon filename or URL for the node header (e.g. "openai.svg"). */
 	icon?: string;
 
+	/** Provenance marker: 'capsule' for nodes installed at runtime via a .rrc (rrext_install_node). */
+	source?: string;
+
 	/** Bitmask of actions this service supports. */
 	actions?: number;
 

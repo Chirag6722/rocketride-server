@@ -198,6 +198,17 @@ const styles = {
 		lineHeight: '14px',
 	} as CSSProperties,
 
+	// "Custom" pill for a capsule-installed node's icon tile: blue to set it apart
+	// from the yellow Experimental pill.
+	iconTileCustom: {
+		fontSize: '9px',
+		padding: '1px 4px',
+		borderRadius: '3px',
+		backgroundColor: 'var(--rr-color-info)',
+		color: 'var(--rr-fg-button)',
+		lineHeight: '14px',
+	} as CSSProperties,
+
 	sectionHeader: {
 		...commonStyles.labelUppercase,
 		display: 'flex',
@@ -257,6 +268,18 @@ const styles = {
 		lineHeight: '14px',
 	} as CSSProperties,
 
+	// "Custom" badge for a capsule-installed node in the list row (blue, vs the yellow Experimental).
+	customBadge: {
+		fontSize: '9px',
+		padding: '1px 4px',
+		borderRadius: '3px',
+		backgroundColor: 'var(--rr-color-info)',
+		color: 'var(--rr-fg-button)',
+		marginLeft: '4px',
+		flexShrink: 0,
+		lineHeight: '14px',
+	} as CSSProperties,
+
 	empty: {
 		padding: '16px',
 		textAlign: 'center' as const,
@@ -310,7 +333,7 @@ interface ICreateNodePanelProps {
  * @returns The DetailPanel drawer element.
  */
 export default function CreateNodePanel({ onClose }: ICreateNodePanelProps): ReactElement {
-	const { inventory } = useFlowProject();
+	const { inventory, onUninstallNode } = useFlowProject();
 	const { addNode, setTempNode } = useFlowGraph();
 	// The one shared prefs accessor: drives the list/icon view-mode persistence
 	// below (the drawer width rides the same store via DetailPanel's persistKey).
@@ -532,6 +555,14 @@ export default function CreateNodePanel({ onClose }: ICreateNodePanelProps): Rea
 															onClickItem(key);
 														}
 													}}
+													onContextMenu={
+														service.source === 'capsule' && onUninstallNode
+															? (e) => {
+																	e.preventDefault();
+																	if (window.confirm(`Uninstall custom node "${service.title ?? key}"? It will be removed from your store.`)) onUninstallNode(key);
+																}
+															: undefined
+													}
 													style={styles.iconTile}
 													title={service.title ?? key}
 													onMouseEnter={(e) => {
@@ -544,6 +575,7 @@ export default function CreateNodePanel({ onClose }: ICreateNodePanelProps): Rea
 													{service.icon && <Icon name={service.icon} style={styles.iconTileIcon} />}
 													<span style={styles.iconTileTitle}>{service.title ?? key}</span>
 													{!!(service.capabilities && IServiceCapabilities.Experimental & service.capabilities) && <span style={styles.iconTileExperimental}>Experimental</span>}
+													{service.source === 'capsule' && <span style={styles.iconTileCustom}>Custom</span>}
 												</div>
 											))}
 										</div>
@@ -562,6 +594,14 @@ export default function CreateNodePanel({ onClose }: ICreateNodePanelProps): Rea
 														onClickItem(key);
 													}
 												}}
+												onContextMenu={
+													service.source === 'capsule' && onUninstallNode
+														? (e) => {
+																e.preventDefault();
+																if (window.confirm(`Uninstall custom node "${service.title ?? key}"? It will be removed from your store.`)) onUninstallNode(key);
+															}
+														: undefined
+												}
 												style={styles.item}
 												onMouseEnter={(e) => {
 													(e.currentTarget as HTMLElement).style.backgroundColor = 'var(--rr-bg-list-hover)';
@@ -574,6 +614,7 @@ export default function CreateNodePanel({ onClose }: ICreateNodePanelProps): Rea
 												<span style={styles.itemTitle}>{service.title ?? key}</span>
 												{Array.isArray(service.classType) && service.classType.includes('tool') && <span style={styles.badge}>Tool</span>}
 												{!!(service.capabilities && IServiceCapabilities.Experimental & service.capabilities) && <span style={styles.experimentalBadge}>Experimental</span>}
+												{service.source === 'capsule' && <span style={styles.customBadge}>Custom</span>}
 											</div>
 										))
 									))}

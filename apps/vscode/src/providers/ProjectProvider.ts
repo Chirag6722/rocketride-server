@@ -491,6 +491,24 @@ export class ProjectProvider implements vscode.CustomTextEditorProvider {
 				return;
 			}
 			switch (data.type) {
+				case 'node:uninstallCapsule': {
+					const client = this.connectionManager.getClient();
+					if (!client) {
+						vscode.window.showWarningMessage('Not connected to a RocketRide engine.');
+						return;
+					}
+					try {
+						const res = await client.call<{ ok?: boolean; uninstalled?: string; error?: string }>('rrext_uninstall_node', { node: data.node });
+						if (res?.ok) {
+							vscode.window.showInformationMessage(`Node capsule uninstalled: ${res.uninstalled ?? data.node}. Reopen the pipeline to refresh the catalog.`);
+						} else {
+							vscode.window.showWarningMessage(`Uninstall failed: ${res?.error ?? 'unknown reason'}`);
+						}
+					} catch (err) {
+						vscode.window.showErrorMessage(`Uninstall failed: ${err}`);
+					}
+					return;
+				}
 				case 'view:ready': {
 					editorState.isReady = true;
 

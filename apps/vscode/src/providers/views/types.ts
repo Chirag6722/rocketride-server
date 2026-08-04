@@ -57,6 +57,7 @@ export type ProjectWebviewToHost =
 	| { type: 'project:openExternal'; url: string }
 	| { type: 'status:pipelineAction'; action: 'run' | 'stop' | 'restart'; source?: string }
 	| { type: 'status:missingEnvVars'; keys: string[] }
+	| { type: 'node:uninstallCapsule'; node: string }
 	| { type: 'trace:clear' }
 	// Deploy lifecycle requests from the DEPLOY page (see deployTypes.ts).
 	| DeployLifecycleWebviewToHost
