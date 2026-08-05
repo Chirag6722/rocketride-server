@@ -674,13 +674,23 @@ def _save_hash(hash_file: str, hash_value: str):
         f.write(hash_value)
 
 
+# Requirements files carrying this marker are never installed in any lane
+# (see tools/contract_checks: fundamental incompatibilities like surya/trocr's
+# opencv pin). Their pins must not constrain the resolve for everything else.
+_NEVER_INSTALL_MARKER = 'contract-check: disable'
+
+
 def _combine_requirements(file_paths: list[str], output_path: str):
-    """Concatenate all requirement files into one."""
+    """Concatenate all requirement files into one, skipping never-installed ones."""
     with open(output_path, 'w', encoding='utf-8') as out:
         for path in file_paths:
-            out.write(f'# Source: {path}\n')
             with open(path, 'r', encoding='utf-8') as inp:
-                out.write(inp.read())
+                content = inp.read()
+            if _NEVER_INSTALL_MARKER in content:
+                out.write(f'# Source: {path} (excluded from constraints: {_NEVER_INSTALL_MARKER})\n')
+                continue
+            out.write(f'# Source: {path}\n')
+            out.write(content)
             out.write('\n')
 
 
