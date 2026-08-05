@@ -400,6 +400,17 @@ await client.disconnect();
 ```typescript
 import { RocketRideClient } from 'rocketride';
 
+// The minimal webhook pipeline from the Quick Start above
+const myPipelineConfig = {
+	components: [
+		{ id: 'webhook_1', provider: 'webhook', config: { hideForm: true, mode: 'Source', parameters: {}, type: 'webhook' } },
+		{ id: 'response_text_1', provider: 'response_text', config: { laneName: 'text' }, input: [{ lane: 'text', from: 'webhook_1' }] },
+	],
+	project_id: 'quickstart',
+	viewport: { x: 0, y: 0, zoom: 1 },
+	version: 1,
+};
+
 const status = await RocketRideClient.withConnection({ auth: 'my-key', uri: 'ws://localhost:5565' }, async (client) => {
 	const { token } = await client.use({ pipeline: myPipelineConfig });
 	await client.send(token, JSON.stringify({ data: 1 }));

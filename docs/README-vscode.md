@@ -63,7 +63,6 @@ Need inspiration? Check out [awesome-rocketride](https://github.com/rocketride-o
 | -------------------------------------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `rocketride.development.connectionMode`      | `string` | `"local"`  | Connection mode: `"local"`, `"docker"`, `"service"`, `"onprem"`, or `"cloud"`                                                             |
 | `rocketride.development.hostUrl`             | `string` | `""`       | Host URL for the development connection                                                                                                   |
-| `rocketride.development.teamId`              | `string` | `""`       | Cloud team ID for the development connection                                                                                              |
 | `rocketride.development.local.engineVersion` | `string` | `"latest"` | Engine version to download. `"latest"` for newest stable, `"prerelease"` for newest prerelease, or a specific tag like `"server-v3.1.1"`. |
 
 ### Deployment Connection
@@ -74,7 +73,6 @@ The deployment target can use a separate connection or share the development con
 | ------------------------------------------- | ---------------- | ---------- | --------------------------------------------------------- |
 | `rocketride.deployment.connectionMode`      | `string \| null` | `null`     | Deployment connection mode (`null` = same as development) |
 | `rocketride.deployment.hostUrl`             | `string`         | `""`       | Host URL for the deployment connection                    |
-| `rocketride.deployment.teamId`              | `string`         | `""`       | Cloud team ID for the deployment connection               |
 | `rocketride.deployment.local.engineVersion` | `string`         | `"latest"` | Engine version for the local deployment target            |
 
 ### General
@@ -84,7 +82,7 @@ The deployment target can use a separate connection or share the development con
 | `rocketride.defaultPipelinePath`     | `string`  | `"${workspaceFolder}/pipelines"` | Default directory path for creating new pipeline files                                                  |
 | `rocketride.pipelineRestartBehavior` | `string`  | `"prompt"`                       | Behavior when a `.pipe` file changes while the pipeline is running: `"auto"`, `"manual"`, or `"prompt"` |
 | `rocketride.pipelineTTL`             | `integer` | `900`                            | Default idle timeout in seconds before a running pipeline is shut down (`0` = run until stopped)        |
-| `rocketride.pipelineTraceLevel`      | `string`  | `"summary"`                      | Tracing verbosity for pipeline execution: `"none"`, `"metadata"`, `"summary"`, or `"full"`              |
+| `rocketride.pipelineTraceLevel`      | `string`  | `"full"`                         | Tracing verbosity for pipeline execution: `"none"`, `"metadata"`, `"summary"`, or `"full"`              |
 | `rocketride.taskArguments`           | `string`  | `""`                             | Additional command-line arguments passed to each pipeline task                                          |
 | `rocketride.pipelineDebugOutput`     | `boolean` | `false`                          | Enable full debug output for pipeline tasks (`--trace=debugOut`)                                        |
 | `rocketride.welcomeDismissed`        | `boolean` | `false`                          | Set to `true` to skip the welcome page on startup                                                       |
