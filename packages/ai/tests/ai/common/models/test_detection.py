@@ -1,5 +1,9 @@
 """Unit tests for the detection loader + facade (no torch/transformers needed)."""
 
+import contextlib
+import sys
+import types
+
 import pytest
 from PIL import Image
 
@@ -104,3 +108,169 @@ def test_facade_proxy_rescales_boxes_to_original(monkeypatch):
     assert b['x1'] == pytest.approx(100.0 * fx)
     assert b['y2'] == pytest.approx(150.0 * fy)
     assert out[0]['centroid']['x'] == pytest.approx(150.0 * fx)
+
+
+# ---------------------------------------------------------------------------
+# GPU safety: transformers post-processing converts tensors with .numpy(),
+# which raises c10 TypeError for CUDA tensors and killed the model server on
+# GPU boxes. These tests simulate that with fake tensors that raise on
+# .numpy() unless on 'cpu', so the crash is caught without a GPU.
+# ---------------------------------------------------------------------------
+
+
+class _FakeTensor:
+    """Minimal tensor stand-in: .numpy() raises off-CPU, exactly like torch."""
+
+    def __init__(self, values, device='cuda:1'):
+        self.values = list(values)
+        self.device = device
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return _FakeTensor(self.values, device='cpu')
+
+    def numpy(self):
+        if self.device != 'cpu':
+            raise TypeError(
+                f"can't convert {self.device} device type tensor to numpy. "
+                'Use Tensor.cpu() to copy the tensor to host memory first.'
+            )
+        return list(self.values)
+
+    def tolist(self):
+        return list(self.values)
+
+
+class _FakeOutputs:
+    """ModelOutput-like container: dict-style items() + attribute access."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def items(self):
+        return self.__dict__.items()
+
+
+class _FakeBatch(dict):
+    """BatchEncoding stand-in: mapping (for **inputs) with .input_ids and .to()."""
+
+    def __init__(self, device='cpu'):
+        super().__init__(input_ids=_FakeTensor([101, 102], device=device))
+
+    @property
+    def input_ids(self):
+        return self['input_ids']
+
+    def to(self, device):
+        return _FakeBatch(device=device)
+
+
+def _install_fake_torch(monkeypatch):
+    """Provide ai.common.torch (no_grad only) without importing real torch."""
+    mod = types.ModuleType('ai.common.torch')
+    mod.torch = types.SimpleNamespace(no_grad=contextlib.nullcontext)
+    monkeypatch.setitem(sys.modules, 'ai.common.torch', mod)
+
+
+def test_outputs_to_cpu_moves_all_tensors():
+    out = _FakeOutputs(
+        logits=_FakeTensor([0.4], device='cuda:1'),
+        pred_boxes=_FakeTensor([0.1, 0.2, 0.3, 0.4], device='cuda:1'),
+        loss=None,
+    )
+    moved = detmod._outputs_to_cpu(out)
+    assert isinstance(moved, _FakeOutputs)
+    assert moved.logits.device == 'cpu' and moved.pred_boxes.device == 'cpu'
+    assert moved.logits.numpy() == [0.4]  # raises unless actually on CPU
+    assert moved.loss is None  # non-tensor fields pass through
+    assert out.logits.device == 'cuda:1'  # original untouched
+
+
+def test_mmgdino_postprocess_receives_host_tensors(monkeypatch):
+    """detect() must hand transformers CPU tensors and plain (h, w) sizes even
+    when the model runs on CUDA — the fake processor replicates transformers'
+    internal .numpy() calls, which crash on any CUDA tensor.
+    """
+    _install_fake_torch(monkeypatch)
+    captured = {}
+
+    class _FakeGDinoProcessor:
+        def __call__(self, images=None, text=None, return_tensors=None):
+            return _FakeBatch()
+
+        def post_process_grounded_object_detection(
+            self, outputs, input_ids, threshold=None, text_threshold=None, target_sizes=None
+        ):
+            # v5 signature: `box_threshold` was renamed to `threshold`.
+            outputs.logits.numpy()  # what transformers does internally
+            outputs.pred_boxes.numpy()
+            input_ids.numpy()
+            if hasattr(target_sizes, 'numpy'):
+                target_sizes.numpy()
+            captured['target_sizes'] = target_sizes
+            captured['threshold'] = threshold
+            return [
+                {
+                    'scores': [0.9],
+                    'labels': ['cat'],
+                    'boxes': [_FakeTensor([1.0, 2.0, 3.0, 4.0], device='cpu')],
+                }
+            ]
+
+    det = detmod.MmGDinoLoader.__new__(detmod.MmGDinoLoader)
+    det.device = 'cuda:1'
+    det.threshold = 0.3
+    det.text_threshold = 0.25
+    det._processor = _FakeGDinoProcessor()
+    det._model = lambda **inputs: _FakeOutputs(
+        logits=_FakeTensor([0.4], device='cuda:1'),
+        pred_boxes=_FakeTensor([0.1, 0.2, 0.3, 0.4], device='cuda:1'),
+    )
+
+    out = det.detect(Image.new('RGB', (8, 8)), prompt='cat')
+
+    assert out == [detmod._to_detection('cat', 0.9, 1.0, 2.0, 3.0, 4.0)]
+    assert captured['target_sizes'] == [(8, 8)]  # plain python, never a CUDA tensor
+    assert captured['threshold'] == 0.3
+
+
+def test_rtdetr_postprocess_receives_host_tensors():
+    """Same guarantee for the RT-DETR fallback path."""
+    captured = {}
+
+    class _FakeRtProcessor:
+        def __call__(self, images=None, return_tensors=None):
+            return _FakeBatch()
+
+        def post_process_object_detection(self, outputs, target_sizes=None, threshold=None):
+            outputs.logits.numpy()  # what transformers does internally
+            outputs.pred_boxes.numpy()
+            if hasattr(target_sizes, 'numpy'):
+                target_sizes.numpy()
+            captured['target_sizes'] = target_sizes
+            return [
+                {
+                    'scores': [0.8],
+                    'labels': [3],
+                    'boxes': [_FakeTensor([1.0, 2.0, 3.0, 4.0], device='cpu')],
+                }
+            ]
+
+    det = detmod.RFDetrLoader.__new__(detmod.RFDetrLoader)
+    det.device = 'cuda:1'
+    det.threshold = 0.3
+    det._impl = 'rtdetr'
+    det._labels = {3: 'dog'}
+    det._torch = types.SimpleNamespace(no_grad=contextlib.nullcontext)
+    det._processor = _FakeRtProcessor()
+    det._model = lambda **inputs: _FakeOutputs(
+        logits=_FakeTensor([0.4], device='cuda:1'),
+        pred_boxes=_FakeTensor([0.1, 0.2, 0.3, 0.4], device='cuda:1'),
+    )
+
+    out = det.detect(Image.new('RGB', (8, 8)))
+
+    assert out == [detmod._to_detection('dog', 0.8, 1.0, 2.0, 3.0, 4.0)]
+    assert captured['target_sizes'] == [(8, 8)]

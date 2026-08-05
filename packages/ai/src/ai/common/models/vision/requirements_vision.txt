@@ -2,5 +2,18 @@
 # Shared base for all vision-family loaders (CLIP/ViT, depth, detection, ...).
 # Per-model extras live in requirements_<x>.txt (installed after this base).
 # torch via ai.common.torch; numpy is a base engine dep (not declared).
-transformers==4.53.3
+# transformers pin: 5.7.0 is the lowest stable release that satisfies every
+# in-repo floor: SAM 3 (Sam3Model/Sam3Processor — shipped with v5.0.0; latest
+# 4.x is 4.57.x), Qwen3-VL (Qwen3VLForConditionalGeneration, needs >=4.57),
+# and microsoft/Mage-VL, whose model card requires transformers>=5.7.
+# Existing loaders re-verified against the v5.7.0 docs: Mask2Former (processor
+# + post_process_instance/semantic_segmentation unchanged), Grounding-DINO
+# (post_process_grounded_object_detection threshold=), RT-DETR, TrOCR,
+# CLIP/ViT, Idefics3/SmolVLM, AutoModelForImageTextToText + dtype= kwarg.
+# v5 image processors are torchvision-backed (torchvision ships via
+# ai.common.torch); TF/Flax classes are gone (unused here). NOTE: this pin
+# MUST stay identical to ../transformers/requirements_transformers.txt — the
+# engine's depends() compiles ALL requirements files into one constraint set,
+# so divergent pins fail the build.
+transformers==5.7.0
 Pillow

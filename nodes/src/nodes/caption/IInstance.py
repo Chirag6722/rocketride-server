@@ -29,10 +29,10 @@ from .IGlobal import IGlobal
 
 class IInstance(IInstanceBase):
     """
-    IInstance handles per-frame captioning for the caption node.
+    IInstance handles per-frame image description for the Describe (caption) node.
 
     Accepts image lane (AVI stream). Emits per frame:
-      - text lane: caption string.
+      - text lane: description string.
 
     Inference is delegated to the Captioner facade (ai.common.models.vision.caption),
     which runs on the model server when --modelserver is set, else locally.
@@ -46,14 +46,18 @@ class IInstance(IInstanceBase):
         self._image_data = None
 
     def _emit(self, image):
-        """Caption one image and write the result to the text lane.
+        """Describe one image and write the result to the text lane.
 
         Args:
             image: Decoded input PIL image for this frame.
         """
         if self.instance.hasListener('text'):
             with self.IGlobal.device_lock:
-                caption_text = self.IGlobal.captioner.caption(image)
+                caption_text = self.IGlobal.captioner.caption(
+                    image,
+                    prompt=self.IGlobal.prompt,
+                    max_new_tokens=self.IGlobal.max_new_tokens,
+                )
             self.instance.writeText(caption_text)
 
     def writeImage(self, action: int, mimeType: str, buffer: bytes):

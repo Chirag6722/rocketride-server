@@ -101,7 +101,7 @@ class DepthEstimatorLoader(BaseLoader):
             task='depth-estimation',
             model=model_name,
             device=pipe_device,
-            torch_dtype=torch.float32,
+            dtype=torch.float32,  # renamed from torch_dtype in transformers v5
             revision=revision,
         )
         if hasattr(pipe, 'model'):

@@ -83,6 +83,20 @@ def _parse_prompt(prompt: str) -> List[str]:
     return [c.strip() for c in prompt.replace('.', ',').split(',') if c.strip()]
 
 
+def _outputs_to_cpu(outputs: Any) -> Any:
+    """Return model outputs with every tensor moved to host (CPU) memory.
+
+    transformers post-processing converts the tensors it is handed via
+    ``.numpy()`` internally, which raises ``TypeError: can't convert cuda:N
+    device type tensor to numpy`` for CUDA tensors — an uncaught c10 error
+    that kills the whole model-server process on GPU boxes. Copying to host
+    first is negligible next to model compute and independent of the
+    transformers version. Accepts any ModelOutput-like mapping of tensors.
+    """
+    moved = {k: v.detach().cpu() if hasattr(v, 'cpu') else v for k, v in outputs.items()}
+    return type(outputs)(**moved)
+
+
 class RFDetrLoader:
     """RF-DETR closed-set detector (Apache-2.0). Prefers the rfdetr package; falls back to RT-DETR."""
 
@@ -199,8 +213,13 @@ class RFDetrLoader:
         with torch.no_grad():
             outputs = self._model(**inputs)
 
-        target_sizes = torch.tensor([(image.height, image.width)], device=self.device)
-        results = self._processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=thr)[0]
+        # Post-process on host: transformers converts tensors with .numpy()
+        # internally, which raises for CUDA tensors (see _outputs_to_cpu).
+        # Plain (h, w) sizes keep target_sizes device-free.
+        outputs = _outputs_to_cpu(outputs)
+        results = self._processor.post_process_object_detection(
+            outputs, target_sizes=[(image.height, image.width)], threshold=thr
+        )[0]
 
         out = []
         for score, label_id, box in zip(results['scores'], results['labels'], results['boxes']):
@@ -274,13 +293,18 @@ class MmGDinoLoader:
         with torch.no_grad():
             outputs = self._model(**inputs)
 
-        target_sizes = torch.tensor([(image.height, image.width)], device=self.device)
+        # Post-process on host: transformers' grounded post-processing calls
+        # .numpy() on the tensors it is handed, which raises "can't convert
+        # cuda:N device type tensor to numpy" and killed the model server on
+        # GPU boxes. Moving outputs/input_ids to CPU and passing plain (h, w)
+        # sizes is version-agnostic (see _outputs_to_cpu).
+        outputs = _outputs_to_cpu(outputs)
         results = self._processor.post_process_grounded_object_detection(
             outputs,
-            inputs.input_ids,
-            box_threshold=thr,
+            inputs.input_ids.cpu(),
+            threshold=thr,  # renamed from box_threshold in transformers v5
             text_threshold=self.text_threshold,
-            target_sizes=target_sizes,
+            target_sizes=[(image.height, image.width)],
         )[0]
 
         out = []

@@ -31,7 +31,7 @@ class IGlobal(IGlobalBase):
     device_lock = None
 
     def beginGlobal(self):
-        """Build the shared Segmenter facade from node config (mode/model/threshold/maxEdge)."""
+        """Build the shared Segmenter facade from node config (mode/model/threshold/maxEdge/prompt)."""
         if self.IEndpoint.endpoint.openMode == OPEN_MODE.CONFIG:
             return
 
@@ -45,16 +45,32 @@ class IGlobal(IGlobalBase):
             Segmenter,
             DEFAULT_MODE,
             MODES,
+            PROMPT_MODES,
             DEFAULT_THRESHOLD,
             DEFAULT_MAX_EDGE,
         )
 
         config = Config.getNodeConfig(self.glb.logicalType, self.glb.connConfig)
+        conn = self.glb.connConfig
 
         mode = str(config.get('mode', DEFAULT_MODE)).lower().strip()
         if mode not in MODES:
             warning(f'detect_segment: unknown mode "{mode}", falling back to {DEFAULT_MODE}.')
             mode = DEFAULT_MODE
+
+        # Canvas/.pipe configs nest UI field values under a 'parameters' object with the
+        # field prefix kept (parameters['detect_segment.prompt']); getNodeConfig neither
+        # merges that object nor strips prefixes, so read it directly before the fallbacks.
+        params = conn.get('parameters')
+        ui_prompt = params.get('detect_segment.prompt') if params is not None else None
+        prompt = str(
+            ui_prompt or conn.get('detect_segment.prompt') or conn.get('prompt') or config.get('prompt') or ''
+        ).strip()
+        if mode in PROMPT_MODES and not prompt:
+            raise ValueError(
+                f'detect_segment: mode "{mode}" requires a non-empty prompt (detect_segment.prompt). '
+                'Set a concept prompt in the UI (e.g. "yellow school bus") and restart the pipeline.'
+            )
 
         model_name = (config.get('model') or '').strip() or None
         raw_threshold = config.get('threshold', DEFAULT_THRESHOLD)
@@ -74,7 +90,13 @@ class IGlobal(IGlobalBase):
         revision = (config.get('revision') or '').strip() or None
 
         self.segmenter = Segmenter(
-            mode=mode, model_name=model_name, device=None, threshold=threshold, max_edge=max_edge, revision=revision
+            mode=mode,
+            model_name=model_name,
+            device=None,
+            threshold=threshold,
+            max_edge=max_edge,
+            prompt=prompt or None,
+            revision=revision,
         )
 
         # Local inference must serialize GPU access

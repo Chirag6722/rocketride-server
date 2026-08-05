@@ -51,9 +51,19 @@ class IGlobal(IGlobalBase):
             warning(f'detect: unknown engine "{backend}", defaulting to {DEFAULT_BACKEND}')
             backend = DEFAULT_BACKEND
 
-        prompt = (config.get('prompt') or conn.get('detect.prompt') or conn.get('prompt') or '').strip()
-        # Check threshold
-        raw_threshold = conn.get('detect.threshold', config.get('threshold', DEFAULT_THRESHOLD))
+        # Canvas/.pipe configs nest UI field values under a 'parameters' object with the
+        # field prefix kept (parameters['detect.prompt']); getNodeConfig neither merges
+        # that object nor strips prefixes, so read it directly before the fallbacks.
+        params = conn.get('parameters')
+
+        ui_prompt = params.get('detect.prompt') if params is not None else None
+        prompt = str(ui_prompt or conn.get('detect.prompt') or conn.get('prompt') or config.get('prompt') or '').strip()
+        # Check threshold; explicit None checks so a valid 0.0 is not dropped.
+        raw_threshold = params.get('detect.threshold') if params is not None else None
+        if raw_threshold is None:
+            raw_threshold = conn.get('detect.threshold')
+        if raw_threshold is None:
+            raw_threshold = config.get('threshold', DEFAULT_THRESHOLD)
         try:
             threshold = float(raw_threshold)
         except (TypeError, ValueError):

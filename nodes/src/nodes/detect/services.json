@@ -2,7 +2,7 @@
 	"title": "Object Detection",
 	"protocol": "detect://",
 	"classType": ["image"],
-	"capabilities": ["gpu", "experimental"],
+	"capabilities": ["gpu"],
 	"register": "filter",
 	"node": "python",
 	"path": "nodes.detect",

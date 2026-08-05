@@ -25,16 +25,22 @@
 """
 Caption: image captioning loader + facade (vision family).
 
-- CaptionerLoader: load/preprocess/inference/postprocess for Florence-2
-  (``trust_remote_code``). Returns a plain caption string (JSON-friendly).
+- CaptionerLoader: load/preprocess/inference/postprocess for image-text-to-text
+  VLMs. Natively supported architectures (SmolVLM/Idefics3, Qwen3-VL, ...) load
+  via AutoModelForImageTextToText with no trust_remote_code. Models that ship
+  their own modeling code (config.json has an ``auto_map``, e.g. Mage-VL) load
+  via AutoModelForCausalLM with trust_remote_code=True, and are REQUIRED to be
+  pinned to a full commit sha so the executed remote code is immutable.
+  Returns a plain caption string (JSON-friendly).
 - Captioner: user-facing facade. Uses the model server when --modelserver is
   set, else local. ``caption(image)`` returns a string. ``model_name`` is the
-  model identity; ``task`` (caption granularity) is per-request.
+  model identity; ``prompt`` and ``max_new_tokens`` are per-request.
 """
 
 import io
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,57 +52,27 @@ from ..base import BaseLoader, get_model_server_address, ModelClient
 
 logger = logging.getLogger('rocketlib.models.caption')
 
-DEFAULT_MODEL = 'microsoft/Florence-2-base'
-DEFAULT_TASK = 'caption'
+DEFAULT_MODEL = 'HuggingFaceTB/SmolVLM-500M-Instruct'
+DEFAULT_PROMPT = 'Describe this image in detail.'
+DEFAULT_MAX_NEW_TOKENS = 256
 
-# Caption granularity -> Florence-2 task token. Detection / grounding / OCR
-# tasks are intentionally omitted (the dedicated Object Detection and OCR nodes
-# use stronger models for those jobs).
-TASKS = {
-    'caption': '<CAPTION>',
-    'detailed_caption': '<DETAILED_CAPTION>',
-    'more_detailed_caption': '<MORE_DETAILED_CAPTION>',
-}
+# GPU allocation request when the profile doesn't provide memory_gb
+# (sized for the SmolVLM-500M default; 4B profiles pass ~10-11 GB).
+DEFAULT_MEMORY_GB = 2.0
 
-MAX_NEW_TOKENS = 256
-# Local-mode watchdog: Florence can hang on complex scenes; skip the frame past this.
+_FULL_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
+
+# Local-mode watchdog: skip the frame if generation hangs past this.
 INFERENCE_TIMEOUT = 60
 
-# Long-edge (px) the input is downscaled to before captioning. Florence resizes
-# internally to its own input, so this is quality-neutral and just trims the
-# model-server payload on large images.
-INFER_MAX_EDGE = 1024
-
-
-def _resolve_token(task: Optional[str]) -> str:
-    """Map a caption-granularity key to its Florence-2 task token (falling back to <CAPTION>)."""
-    return TASKS.get(task or DEFAULT_TASK, TASKS[DEFAULT_TASK])
-
-
-def _extract_caption(parsed: Any, token: str) -> str:
-    """Pull the plain caption string out of Florence-2's post_process_generation result.
-
-    Args:
-        parsed: The dict returned by ``processor.post_process_generation``.
-        token: The task token used (the dict is keyed by it).
-
-    Returns:
-        The caption as a stripped string.
-    """
-    result = parsed.get(token, parsed) if isinstance(parsed, dict) else parsed
-    if isinstance(result, dict) and len(result) == 1:
-        only_val = next(iter(result.values()))
-        if isinstance(only_val, str):
-            return only_val.strip()
-    if isinstance(result, (dict, list)):
-        import json
-
-        return json.dumps(result)
-    return str(result).strip()
+# Long-edge (px) the input is downscaled to before captioning. SmolVLM's
+# processor handles inputs up to ~1536 px well; this is quality-neutral and
+# trims the model-server payload on large images.
+INFER_MAX_EDGE = 1536
 
 
 class CaptionerLoader(BaseLoader):
-    """Static loader for Florence-2 image captioning (``trust_remote_code``)."""
+    """Static loader for image-text-to-text VLM captioning (SmolVLM, Qwen3-VL, Mage-VL, ...)."""
 
     LOADER_TYPE: str = 'caption'
     _REQUIREMENTS_FILE = [
@@ -106,47 +82,123 @@ class CaptionerLoader(BaseLoader):
     _DEFAULTS: dict = {}
 
     @staticmethod
+    def _get_config_dict(model_name: str, revision: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch the raw config.json dict for a model WITHOUT executing remote code.
+
+        Args:
+            model_name: HF model id.
+            revision: Optional pinned model revision.
+
+        Returns:
+            The parsed config.json as a plain dict.
+        """
+        from transformers import PretrainedConfig
+
+        config_dict, _ = PretrainedConfig.get_config_dict(model_name, revision=revision)
+        return config_dict
+
+    @staticmethod
+    def _select_loading_strategy(config_dict: Dict[str, Any], revision: Optional[str] = None) -> str:
+        """Pick the loading path from the model's config — never from its name.
+
+        A config.json with an ``auto_map`` means the repo ships its own modeling
+        code and can only load with trust_remote_code=True. That path is gated:
+        the revision MUST be a full 40-hex commit sha so the code that gets
+        executed is immutable (a branch/tag pin could be moved after review).
+
+        Args:
+            config_dict: Raw config.json dict (from _get_config_dict).
+            revision: Configured model revision.
+
+        Returns:
+            'remote_code' or 'native'.
+
+        Raises:
+            ValueError: remote-code model without a full commit-sha revision.
+        """
+        if config_dict.get('auto_map'):
+            if not (revision and _FULL_SHA_RE.match(str(revision))):
+                raise ValueError(
+                    'caption: this model ships custom modeling code (config.json auto_map) and '
+                    'requires trust_remote_code=True; refusing to load without a full 40-hex '
+                    f'commit-sha revision pin (got revision={revision!r}). Pin the exact sha in '
+                    'the node profile so the executed remote code is immutable.'
+                )
+            return 'remote_code'
+        return 'native'
+
+    @staticmethod
     def load(
         model_name: str = DEFAULT_MODEL,
         device: Optional[str] = None,
         allocate_gpu: Optional[callable] = None,
         exclude_gpus: Optional[List[int]] = None,
         revision: Optional[str] = None,
+        memory_gb: Optional[float] = None,
         **kwargs,
     ) -> Tuple[Any, Dict[str, Any], int]:
-        """Load Florence-2 (model + processor); fp16 on CUDA, fp32 elsewhere.
+        """Load a caption VLM (model + processor); bf16 on CUDA, fp32 elsewhere.
 
         Args:
             model_name: HF model id for the caption model.
             device: Local torch device; ignored when allocate_gpu is provided.
             allocate_gpu: Server callable (memory_gb, exclude_gpus) -> (gpu_index, device).
             exclude_gpus: GPU indices the allocator must avoid.
-            revision: Optional pinned model revision.
+            revision: Optional pinned model revision (REQUIRED as a full commit
+                sha for models that need trust_remote_code).
+            memory_gb: GPU memory to request from the allocator (profile-provided;
+                defaults to DEFAULT_MEMORY_GB for the small default model).
             **kwargs: Ignored extra loader options.
 
         Returns:
-            Tuple (bundle {'model','processor','device'}, metadata dict, gpu_index) — -1 on CPU.
+            Tuple (bundle {'model','processor','device','dtype'}, metadata dict, gpu_index) — -1 on CPU.
         """
         CaptionerLoader._ensure_dependencies()
 
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+
+        config_dict = CaptionerLoader._get_config_dict(model_name, revision=revision)
+        strategy = CaptionerLoader._select_loading_strategy(config_dict, revision=revision)
 
         if allocate_gpu:
-            gpu_index, device = allocate_gpu(2.0, exclude_gpus or [])
+            gpu_index, device = allocate_gpu(float(memory_gb or DEFAULT_MEMORY_GB), exclude_gpus or [])
             logger.info(f'Allocated GPU {gpu_index} ({device}) for caption {model_name}')
         else:
             device = device or pick_torch_device()
             gpu_index = int(device.split(':')[1]) if str(device).startswith('cuda:') else -1
 
-        dtype = pick_torch_dtype(device, cuda='float16', mps='float32', cpu='float32')
-        model = (
-            AutoModelForCausalLM.from_pretrained(
-                model_name, torch_dtype=dtype, trust_remote_code=True, revision=revision
+        dtype = pick_torch_dtype(device, cuda='bfloat16', mps='float32', cpu='float32')
+        if strategy == 'remote_code':
+            # ================================================================
+            # SECURITY: trust_remote_code=True — this executes python shipped
+            # inside the model repo (e.g. microsoft/Mage-VL, whose weights only
+            # load through its bundled modeling_mage_vl.py). This violates the
+            # house no-trust_remote_code rule and was EXPLICITLY accepted for
+            # this loader branch only. Mitigation: _select_loading_strategy has
+            # already enforced that ``revision`` is a full commit sha, and that
+            # SAME sha is passed to every from_pretrained call below, so the
+            # remote code that runs is exactly the reviewed, immutable commit.
+            # trust_remote_code must NEVER become a default or leak into the
+            # native branch.
+            # ================================================================
+            from transformers import AutoModelForCausalLM
+
+            model = (
+                AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype, revision=revision, trust_remote_code=True)
+                .to(device)
+                .eval()
             )
-            .to(device)
-            .eval()
-        )
-        processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True, revision=revision)
+            processor = AutoProcessor.from_pretrained(model_name, revision=revision, trust_remote_code=True)
+        else:
+            # Native path: architecture is registered in transformers, resolved
+            # via the auto-mapping (Idefics3/SmolVLM, Qwen3-VL, future VLMs) —
+            # no trust_remote_code, no per-model class matching.
+            model = (
+                AutoModelForImageTextToText.from_pretrained(model_name, dtype=dtype, revision=revision)
+                .to(device)
+                .eval()
+            )
+            processor = AutoProcessor.from_pretrained(model_name, revision=revision)
 
         metadata = {'device': str(device), 'model_name': model_name, 'loader': 'caption'}
         return {'model': model, 'processor': processor, 'device': device, 'dtype': dtype}, metadata, gpu_index
@@ -181,16 +233,18 @@ class CaptionerLoader(BaseLoader):
         preprocessed: Dict[str, Any],
         metadata: Optional[Dict] = None,
         stream: Optional[Any] = None,
-        task: Optional[str] = None,
+        prompt: Optional[str] = None,
+        max_new_tokens: Optional[int] = None,
     ) -> Any:
-        """Generate a caption per image for the per-request task granularity.
+        """Generate a caption per image for the per-request prompt.
 
         Args:
             model: Loaded bundle (or an object exposing model_obj).
             preprocessed: Output of preprocess (expects 'images').
             metadata: Loader metadata (unused).
             stream: Unused streaming handle.
-            task: Per-request caption granularity key; None uses the default.
+            prompt: Per-request text prompt; None uses the default.
+            max_new_tokens: Generation budget; None uses the default.
 
         Returns:
             List of caption strings (one per image).
@@ -200,24 +254,40 @@ class CaptionerLoader(BaseLoader):
         bundle = model if isinstance(model, dict) else getattr(model, 'model_obj', model)
         mdl, processor, device = bundle['model'], bundle['processor'], bundle['device']
         dtype = bundle.get('dtype')
-        token = _resolve_token(task)
+        prompt = prompt or DEFAULT_PROMPT
+        max_new_tokens = max_new_tokens or DEFAULT_MAX_NEW_TOKENS
+
+        # Chat template: one user turn with an image placeholder + text. This
+        # exact message shape is what SmolVLM (Idefics3), Qwen3-VL and Mage-VL
+        # model cards all document; each processor expands {'type': 'image'}
+        # into its own vision tokens.
+        messages = [
+            {
+                'role': 'user',
+                'content': [
+                    {'type': 'image'},
+                    {'type': 'text', 'text': prompt},
+                ],
+            }
+        ]
+        chat_prompt = processor.apply_chat_template(messages, add_generation_prompt=True)
 
         captions: List[str] = []
         for image in preprocessed['images']:
-            inputs = processor(text=token, images=image, return_tensors='pt').to(device)
-            # Match pixel_values to the model dtype (fp16 on CUDA); input_ids stay long.
+            inputs = processor(text=chat_prompt, images=[image], return_tensors='pt').to(device)
+            # Match pixel_values to the model dtype (bf16 on CUDA); input_ids stay long.
             if dtype is not None and 'pixel_values' in inputs:
                 inputs['pixel_values'] = inputs['pixel_values'].to(dtype)
             with torch.no_grad():
                 generated_ids = mdl.generate(
-                    input_ids=inputs['input_ids'],
-                    pixel_values=inputs['pixel_values'],
-                    max_new_tokens=MAX_NEW_TOKENS,
-                    num_beams=1,  # greedy — faster, avoids hangs on complex scenes
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,  # greedy — deterministic and fast
                 )
-            text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-            parsed = processor.post_process_generation(text, task=token, image_size=(image.width, image.height))
-            captions.append(_extract_caption(parsed, token))
+            # Decode only the newly generated tokens (strip the prompt echo).
+            new_tokens = generated_ids[:, inputs['input_ids'].shape[1] :]
+            text = processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+            captions.append(text.strip())
         return captions
 
     @staticmethod
@@ -246,7 +316,8 @@ class Captioner:
         self,
         model_name: str = DEFAULT_MODEL,
         device: Optional[str] = None,
-        task: str = DEFAULT_TASK,
+        prompt: str = DEFAULT_PROMPT,
+        max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
         revision: Optional[str] = None,
         **kwargs,
     ):
@@ -255,12 +326,14 @@ class Captioner:
         Args:
             model_name: HF model id to load.
             device: None/'server' → model server when --modelserver is set; else a local torch device.
-            task: Default caption granularity (per-request; not part of identity).
+            prompt: Default caption prompt (per-request; not part of identity).
+            max_new_tokens: Default generation budget (per-request; not part of identity).
             revision: Optional pinned model revision (part of model identity).
             **kwargs: Extra identity-only loader options forwarded to load/load_model.
         """
         self.model_name = model_name
-        self.task = task if task in TASKS else DEFAULT_TASK
+        self.prompt = prompt or DEFAULT_PROMPT
+        self.max_new_tokens = max_new_tokens or DEFAULT_MAX_NEW_TOKENS
         self._revision = revision
 
         server_addr = get_model_server_address()
@@ -278,12 +351,13 @@ class Captioner:
                 model_name, device=device if device != 'server' else None, revision=revision, **kwargs
             )
 
-    def caption(self, image: Any, task: Optional[str] = None) -> str:
+    def caption(self, image: Any, prompt: Optional[str] = None, max_new_tokens: Optional[int] = None) -> str:
         """Return a caption string for one image.
 
         Args:
             image: PIL Image or encoded image bytes.
-            task: Override the default caption granularity for this call.
+            prompt: Override the default caption prompt for this call.
+            max_new_tokens: Override the default generation budget for this call.
 
         Returns:
             The caption as a plain string.
@@ -291,7 +365,8 @@ class Captioner:
         if image is None:
             raise ValueError('Image must not be None')
 
-        task = self.task if task is None else task
+        prompt = self.prompt if prompt is None else prompt
+        max_new_tokens = self.max_new_tokens if max_new_tokens is None else max_new_tokens
         metrics.counter('gpu_inference_count', 1)
 
         from PIL import Image
@@ -307,19 +382,25 @@ class Captioner:
             # The model server enforces its own per-request timeout/retry.
             result = self._client.send_command(
                 'rrext_ms_inference',
-                {'data': image_to_bytes(image), 'output_fields': ['caption'], 'task': task},
+                {
+                    'data': image_to_bytes(image),
+                    'output_fields': ['caption'],
+                    'prompt': prompt,
+                    'max_new_tokens': max_new_tokens,
+                },
             )
             items = result.get('result', [])
             return items[0].get('caption', '') if items else ''
 
-        return self._caption_local(image, task)
+        return self._caption_local(image, prompt, max_new_tokens)
 
-    def _caption_local(self, image: Any, task: str) -> str:
+    def _caption_local(self, image: Any, prompt: str, max_new_tokens: int) -> str:
         """Run local inference under a watchdog thread; raise TimeoutError if it hangs.
 
         Args:
             image: PIL Image or encoded image bytes.
-            task: Caption granularity key for this call.
+            prompt: Caption prompt for this call.
+            max_new_tokens: Generation budget for this call.
 
         Returns:
             The caption string.
@@ -329,7 +410,7 @@ class Captioner:
 
         def _work():
             try:
-                result[0] = self._infer_local(image, task)
+                result[0] = self._infer_local(image, prompt, max_new_tokens)
             except BaseException as exc:  # propagated to the caller after join
                 error[0] = exc
 
@@ -342,12 +423,13 @@ class Captioner:
             raise error[0]
         return result[0] or ''
 
-    def _infer_local(self, image: Any, task: str) -> str:
+    def _infer_local(self, image: Any, prompt: str, max_new_tokens: int) -> str:
         """Run preprocess→inference→postprocess locally and record per-phase timing.
 
         Args:
             image: PIL Image or encoded image bytes.
-            task: Caption granularity key for this call.
+            prompt: Caption prompt for this call.
+            max_new_tokens: Generation budget for this call.
 
         Returns:
             The caption string.
@@ -356,7 +438,7 @@ class Captioner:
         pre = CaptionerLoader.preprocess(self._bundle, [image], self._metadata)
         t_pre = (time.perf_counter() - t0) * 1000
         t0 = time.perf_counter()
-        raw = CaptionerLoader.inference(self._bundle, pre, self._metadata, task=task)
+        raw = CaptionerLoader.inference(self._bundle, pre, self._metadata, prompt=prompt, max_new_tokens=max_new_tokens)
         t_gpu = (time.perf_counter() - t0) * 1000
         t0 = time.perf_counter()
         out = CaptionerLoader.postprocess(self._bundle, raw, 1, ['caption'], metadata=self._metadata)
