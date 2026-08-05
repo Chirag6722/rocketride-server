@@ -133,6 +133,47 @@ const processMediaData = (data: any, lane: 'image' | 'audio' | 'video'): string[
 	return urls;
 };
 
+/** A persisted media artifact named in the result: `{mime_type, path}`. */
+export interface MediaArtifact {
+	filename: string;
+	kind: string;
+	name: string;
+	path: string;
+	mime: string;
+}
+
+const MEDIA_LANES = new Set(['image', 'audio', 'video']);
+
+/**
+ * Every persisted media artifact named in the results.
+ *
+ * The response node announces each one over SSE, but that bus is lossy — a dropped
+ * announcement would silently cost the user their media. The result always carries
+ * the path, so the hook merges whatever SSE did not deliver.
+ */
+export const extractMediaArtifacts = (uploadResults: UPLOAD_RESULT[]): MediaArtifact[] => {
+	const artifacts: MediaArtifact[] = [];
+	for (const uploadResult of uploadResults) {
+		const result: any = uploadResult.result;
+		if (!result?.result_types) continue;
+		for (const [fieldName, fieldType] of Object.entries(result.result_types)) {
+			const kind = String(fieldType);
+			if (!MEDIA_LANES.has(kind) || !Array.isArray(result[fieldName])) continue;
+			for (const entry of result[fieldName]) {
+				if (!entry || typeof entry.path !== 'string' || !entry.path) continue;
+				artifacts.push({
+					filename: uploadResult.filepath,
+					kind,
+					name: entry.path.split('/').pop() || kind,
+					path: entry.path,
+					mime: typeof entry.mime_type === 'string' ? entry.mime_type : ''
+				});
+			}
+		}
+	}
+	return artifacts;
+};
+
 // ============================================================================
 // GROUPING AND ORGANIZATION
 // ============================================================================
