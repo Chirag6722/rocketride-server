@@ -345,24 +345,39 @@ class Sam3ConceptLoader:
     ) -> List[Dict[str, Any]]:
         """Run concept segmentation for a text prompt.
 
+        SAM 3 answers ONE noun phrase per query, but the detect node's prompt
+        convention is a ' . '-separated concept list ("grass . tree . stairs").
+        Split and query each concept against the already-loaded model so both
+        prompt styles behave the same across nodes; each instance keeps the
+        concept it matched as its label.
+
         Args:
             image: PIL image.
-            prompt: Concept noun phrase (e.g. "yellow school bus"); empty returns [].
+            prompt: Concept noun phrase, or ' . '-separated list of them;
+                empty returns [].
             threshold: Per-request minimum score; None uses the default.
 
         Returns:
             List of InstanceMask dicts {label, score, box, mask (COCO-RLE)}.
         """
-        import numpy as np
-
         if image is None:
             raise ValueError('Image must not be None')
 
-        concept = (prompt or '').strip()
-        if not concept:
+        concepts = [c.strip() for c in (prompt or '').split('.')]
+        concepts = [c for c in concepts if c]
+        if not concepts:
             return []
 
         thr = self.threshold if threshold is None else float(threshold)
+        out: List[Dict[str, Any]] = []
+        for concept in concepts:
+            out.extend(self._segment_concept(image, concept, thr))
+        return out
+
+    def _segment_concept(self, image: Any, concept: str, thr: float) -> List[Dict[str, Any]]:
+        """One PCS query: all instances of a single noun phrase."""
+        import numpy as np
+
         torch = self._torch
         inputs = self._processor(images=image, text=concept, return_tensors='pt').to(self.device)
         with torch.no_grad():

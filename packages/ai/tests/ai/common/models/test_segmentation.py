@@ -179,6 +179,43 @@ def test_sam3_output_contract(monkeypatch):
     assert inst['mask'] == {'size': [8, 8], 'counts': 'stub'}
 
 
+def test_sam3_prompt_list_splits_into_one_query_per_concept(monkeypatch):
+    """' . '-separated prompts (the detect node convention) fan out to one PCS
+    query per concept, each instance labelled with the concept it matched.
+    """
+    import numpy as np
+    from PIL import Image
+
+    monkeypatch.setattr(segmod, '_encode_rle', lambda m: {'size': list(np.asarray(m).shape), 'counts': 'stub'})
+
+    mask = np.ones((4, 4), dtype=np.uint8)
+    captured = {}
+    queries = []
+    results = {'masks': [_FakeTensor(mask)], 'boxes': [_FakeTensor([0, 0, 4, 4])], 'scores': [0.9]}
+    backend = _make_sam3_backend(results, captured)
+
+    class RecordingProcessor:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __call__(self, images=None, text=None, return_tensors=None):
+            queries.append(text)
+            return self._inner(images=images, text=text, return_tensors=return_tensors)
+
+        def post_process_instance_segmentation(self, *args, **kwargs):
+            return self._inner.post_process_instance_segmentation(*args, **kwargs)
+
+    backend._processor = RecordingProcessor(backend._processor)
+
+    out = backend.segment(Image.new('RGB', (4, 4)), prompt='grass . tree .  stairs ')
+    assert queries == ['grass', 'tree', 'stairs']
+    assert [inst['label'] for inst in out] == ['grass', 'tree', 'stairs']
+
+    queries.clear()
+    assert backend.segment(Image.new('RGB', (4, 4)), prompt=' . . ') == []
+    assert queries == []  # separators only: no inference
+
+
 def test_sam3_threshold_override(monkeypatch):
     import numpy as np
     from PIL import Image
