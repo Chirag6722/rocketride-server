@@ -21,9 +21,9 @@ export default defineConfig({
 		// @modelcontextprotocol/ext-apps bundles zod v4, whose source trips an
 		// esbuild downlevel-destructuring bug against Vite's default baseline
 		// target (chrome87/edge88/es2020/firefox78/safari14 — see esbuild#3488).
-		// These widgets only ever run inside an MCP host's modern iframe
-		// sandbox, never a general web page, so esnext is the right target.
-		target: 'esnext',
+		// es2022 (the repo-wide TS target) is modern enough to avoid that
+		// downlevel path while staying inside the convention.
+		target: 'es2022',
 		rollupOptions: {
 			input: resolve(__dirname, 'src', widget, 'index.html'),
 			output: { entryFileNames: `${widget}.js` },

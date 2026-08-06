@@ -28,6 +28,7 @@ normalizer's hard-failure set.
 
 import asyncio
 from typing import Any, Dict
+from urllib.parse import urlencode
 
 from ..apps import DROPPER_URI
 from ..errors import _bad, _timeout
@@ -195,18 +196,31 @@ async def _run_dropper_pipe(client, tasks, args: Dict[str, Any]) -> dict:
     started = started or {}
     token = started.get('token')
     public_token = started.get('publicToken')
-    if not token or not public_token:
+    if not token:
+        return _bad(
+            'engine did not return a task token and public auth for the dropper URL',
+            'the pipeline may lack a data-ingress source, or the engine response was malformed',
+        )
+    if not public_token:
+        # The task is already running engine-side and the caller gets no
+        # token back to terminate with -- tear it down rather than orphan it
+        # until its ttl expires (or forever, when ttl is 0).
+        try:
+            await asyncio.wait_for(client.terminate(token), timeout=DEFAULT_TIMEOUT_SECONDS)
+        except Exception:  # noqa: BLE001 - best-effort cleanup on an already-failed call
+            pass
         return _bad(
             'engine did not return a task token and public auth for the dropper URL',
             'the pipeline may lack a data-ingress source, or the engine response was malformed',
         )
     tasks.add(token, pipeline_ref=filepath or '<inline>')
 
+    base_url = str(client.base_url).rstrip('/')
     result_payload: Dict[str, Any] = {
         'ok': True,
         'task_token': token,
-        'upload_url': f'{client.base_url}/task/data?token={token}&auth={public_token}',
-        'dropper_url': f'{client.base_url}/dropper?auth={public_token}',
+        'upload_url': f'{base_url}/task/data?{urlencode({"token": token, "auth": public_token})}',
+        'dropper_url': f'{base_url}/dropper?{urlencode({"auth": public_token})}',
         'projectId': started.get('projectId'),
         'source': started.get('source'),
     }
@@ -215,6 +229,9 @@ async def _run_dropper_pipe(client, tasks, args: Dict[str, Any]) -> dict:
 
 
 async def _send_data(client, tasks, args: Dict[str, Any]) -> dict:
+    # token/data aliases: the SDK validates only the request envelope, not
+    # per-tool inputSchema, so alias-only calls from lenient hosts do land
+    # here. The schema stays strict as the advertised contract.
     token = args.get('task_token') or args.get('token')
     data = args.get('input')
     if data is None:

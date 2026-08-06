@@ -1,6 +1,6 @@
 # Copyright 2026 Aparavi Software AG. MIT License.
 """Tests for the execution tools (`tools/execution.py`):
-`run_pipeline`, `send_data`, `terminate`, `send_files`.
+`run_pipeline`, `run_dropper_pipe`, `send_data`, `terminate`, `send_files`.
 """
 
 import asyncio
@@ -16,13 +16,13 @@ from ai.modules.mcp.tools import register_all
 # --- registration -----------------------------------------------------------
 
 
-def test_register_all_registers_all_four_execution_tools():
+def test_register_all_registers_all_execution_tools():
     registry = ToolRegistry()
 
     register_all(registry)
 
     names = set(registry.names())
-    assert {'run_pipeline', 'send_data', 'terminate', 'send_files'} <= names
+    assert {'run_pipeline', 'run_dropper_pipe', 'send_data', 'terminate', 'send_files'} <= names
 
 
 def test_execution_register_binds_handlers_directly():
@@ -30,7 +30,7 @@ def test_execution_register_binds_handlers_directly():
 
     execution.register(registry)
 
-    for name in ('run_pipeline', 'send_data', 'terminate', 'send_files'):
+    for name in ('run_pipeline', 'run_dropper_pipe', 'send_data', 'terminate', 'send_files'):
         assert registry.handler(name) is not None
 
 
@@ -196,9 +196,13 @@ async def test_send_data_times_out(fake_engine, monkeypatch):
     tasks = TaskRegistry()
 
     async def _hang(*args, **kwargs):
-        raise asyncio.TimeoutError()
+        await asyncio.sleep(60)
 
     monkeypatch.setattr(fake_engine, 'send', _hang)
+    # Shrink the budget so asyncio.wait_for itself produces the timeout —
+    # proving the seam call is actually wrapped, not just that a raised
+    # TimeoutError is converted.
+    monkeypatch.setattr(execution, 'DEFAULT_TIMEOUT_SECONDS', 0.01)
 
     result = await registry.handler('send_data')(fake_engine, tasks, {'task_token': 'tok-1', 'input': 'payload'})
 
@@ -360,6 +364,8 @@ async def test_run_dropper_pipe_bad_request_when_engine_omits_public_token(fake_
     assert result['error_type'] == 'BadRequest'
     # no null-keyed task leaked into the registry
     assert tasks.get(None) is None
+    # the already-started task is torn down, not orphaned until its ttl
+    assert fake_engine.terminated == ['tok-1']
 
 
 # --- pipelineTraceLevel passthrough --------------------------------------
@@ -475,3 +481,28 @@ async def test_run_dropper_pipe_explicit_none_wins(fake_engine):
     await registry.handler('run_dropper_pipe')(fake_engine, tasks, {'filepath': 'p.pipe', 'pipelineTraceLevel': 'none'})
 
     assert fake_engine.used[0]['pipelineTraceLevel'] == 'none'
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_initial_send_timeout_keeps_token_registered(fake_engine, monkeypatch):
+    """The initial-send Timeout envelope must carry the token in its hint and
+    leave the token registered so the caller can recover the still-running task.
+    """
+    registry = ToolRegistry()
+    execution.register(registry)
+    tasks = TaskRegistry()
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(fake_engine, 'send', _hang)
+    monkeypatch.setattr(execution, 'DEFAULT_TIMEOUT_SECONDS', 0.01)
+
+    result = await registry.handler('run_pipeline')(
+        fake_engine, tasks, {'pipeline': {'components': []}, 'inputs': 'hello'}
+    )
+
+    assert result['ok'] is False
+    assert result['error_type'] == 'Timeout'
+    assert fake_engine._token in result['hint']
+    assert tasks.get(fake_engine._token) is not None

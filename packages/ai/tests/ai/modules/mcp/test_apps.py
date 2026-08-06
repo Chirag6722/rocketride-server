@@ -108,8 +108,6 @@ async def test_server_reports_nonempty_version(fake_engine):
 
 
 def test_ui_resource_csp_stamped_when_origin_known(apps_dir, monkeypatch):
-    from ai.modules.mcp import apps
-
     spec = apps.AppSpec(
         uri='ui://rocketride/x.html',
         filename='pipelines-table.html',
@@ -122,8 +120,6 @@ def test_ui_resource_csp_stamped_when_origin_known(apps_dir, monkeypatch):
 
 
 def test_ui_resource_no_csp_without_origin_or_flag(apps_dir):
-    from ai.modules.mcp import apps
-
     listed = apps.list_ui_resources(apps_dir)
     assert all(r.meta is None for r in listed)
 
@@ -132,7 +128,7 @@ def test_ui_resource_no_csp_without_origin_or_flag(apps_dir):
 async def test_run_dropper_pipe_links_dropper_widget(fake_engine, tmp_path):
     import ai.modules.mcp.handlers as handlers_mod
 
-    (tmp_path / 'dropper.html').write_text('<!doctype html><html><body>d</body></html>')
+    (tmp_path / 'dropper.html').write_text('<!doctype html><html><body>d</body></html>', encoding='utf-8')
     server = handlers_mod.build_mcp_server(lambda: fake_engine, apps_dir=tmp_path)
     async with Client(server) as client:
         tools = await client.list_tools()

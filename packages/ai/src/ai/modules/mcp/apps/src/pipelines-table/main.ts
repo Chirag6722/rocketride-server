@@ -24,24 +24,56 @@ interface TaskRow {
 const app = new App({ name: 'RocketRide pipelines table', version: '0.1.0' });
 const root = document.getElementById('root') as HTMLElement;
 
+/**
+ * Extract task rows from a CallToolResult. Throws on a host-level tool error
+ * (isError), an in-band failure envelope (ok: false), or malformed JSON, so
+ * callers surface the failure instead of rendering an empty "no pipelines"
+ * state over it.
+ */
 function parseRows(result: unknown): TaskRow[] {
+	const res = result as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
 	// Tool results arrive as [{ type: 'text', text: '<json>' }].
-	const content = (result as { content?: Array<{ type: string; text?: string }> }).content ?? [];
-	const text = content.find((c) => c.type === 'text')?.text;
-	if (!text) return [];
-	try {
-		const payload = JSON.parse(text) as { tasks?: TaskRow[] };
-		return payload.tasks ?? [];
-	} catch {
-		return [];
+	const text = (res.content ?? []).find((c) => c.type === 'text')?.text;
+	if (res.isError) {
+		throw new Error(text || 'tool call failed');
 	}
+	if (!text) return [];
+	let payload: { ok?: boolean; tasks?: TaskRow[]; message?: string };
+	try {
+		payload = JSON.parse(text) as { ok?: boolean; tasks?: TaskRow[]; message?: string };
+	} catch {
+		throw new Error('malformed tool result (not JSON)');
+	}
+	if (payload.ok === false) {
+		throw new Error(payload.message || 'tool reported a failure');
+	}
+	return payload.tasks ?? [];
+}
+
+function makeRefreshButton(): HTMLButtonElement {
+	const reload = document.createElement('button');
+	reload.className = 'rr-btn rr-btn-ghost';
+	reload.textContent = 'Refresh';
+	reload.onclick = async () => {
+		try {
+			await refresh();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			root.textContent = `Refresh failed: ${msg}`;
+			console.error('refresh failed', err);
+		}
+	};
+	return reload;
 }
 
 function render(rows: TaskRow[]): void {
 	root.classList.remove('empty');
 	if (rows.length === 0) {
 		root.classList.add('empty');
-		root.textContent = 'No pipelines running.';
+		// Keep Refresh available in the empty state too, so the widget can
+		// recover once pipelines start.
+		root.replaceChildren();
+		root.append('No pipelines running.', makeRefreshButton());
 		return;
 	}
 	const table = document.createElement('table');
@@ -63,7 +95,13 @@ function render(rows: TaskRow[]): void {
 			stop.disabled = true;
 			try {
 				// terminate's schema requires task_token (see execution.py _TERMINATE_SCHEMA).
-				await app.callServerTool({ name: 'terminate', arguments: { task_token: row.token } });
+				const result = await app.callServerTool({ name: 'terminate', arguments: { task_token: row.token } });
+				// callServerTool resolves with isError set on a server-side tool
+				// failure instead of rejecting — treat that as a failure too, or
+				// the row would stay visible with its button dead.
+				if ((result as { isError?: boolean }).isError) {
+					throw new Error('terminate reported an error');
+				}
 				await refresh();
 			} catch (err) {
 				stop.disabled = false;
@@ -80,20 +118,7 @@ function render(rows: TaskRow[]): void {
 	card.className = 'rr-card';
 	card.appendChild(table);
 	root.replaceChildren(card);
-
-	const reload = document.createElement('button');
-	reload.className = 'rr-btn rr-btn-ghost';
-	reload.textContent = 'Refresh';
-	reload.onclick = async () => {
-		try {
-			await refresh();
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			root.textContent = `Refresh failed: ${msg}`;
-			console.error('refresh failed', err);
-		}
-	};
-	root.appendChild(reload);
+	root.appendChild(makeRefreshButton());
 }
 
 async function refresh(): Promise<void> {

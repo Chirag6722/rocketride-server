@@ -2,9 +2,10 @@
 """Tests for registry-based tool dispatch (`handlers.build_mcp_server`) and
 the resource wiring it keeps (status / pipelines, no nodes).
 
-Dispatch tests inject a dummy tool by monkeypatching `tools_pkg.register_all`
-(the real one is a no-op until Tasks 4-7 land real tool modules), matching
-the brief's "ToolRegistry containing one dummy tool" scenario.
+Dispatch tests inject a dummy tool by monkeypatching `tools_pkg.register_all`,
+isolating the dispatch machinery from the real 26-tool surface (which
+`test_list_tools_reflects_real_register_all` covers against
+`conftest.EXPECTED_TOOL_NAMES`).
 
 Dispatch is exercised through the v2 in-memory `mcp.client.Client` rather
 than introspecting `server.request_handlers` -- that attribute no longer
@@ -152,35 +153,9 @@ async def test_list_tools_reflects_real_register_all(fake_engine):
     async with Client(server) as client:
         result = await client.list_tools()
 
-    names = {t.name for t in result.tools}
-    assert names == {
-        'list_components',
-        'describe_component',
-        'validate_pipeline',
-        'describe_pipeline',
-        'run_pipeline',
-        'run_dropper_pipe',
-        'send_data',
-        'terminate',
-        'send_files',
-        'store_read',
-        'store_list',
-        'store_stat',
-        'store_get_url',
-        'save_template',
-        'load_template',
-        'deploy_add',
-        'deploy_list',
-        'deploy_status',
-        'deploy_remove',
-        'deploy_update',
-        'monitor',
-        'list_running_pipelines',
-        'log_chapters',
-        'log_read',
-        'log_traces',
-        'log_trace',
-    }
+    from .conftest import EXPECTED_TOOL_NAMES
+
+    assert {t.name for t in result.tools} == set(EXPECTED_TOOL_NAMES)
 
 
 @pytest.mark.asyncio

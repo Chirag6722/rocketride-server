@@ -10,6 +10,7 @@ and console still exist, but traces come back empty.
 import asyncio
 from typing import Any, Dict
 
+from ..engine import LogNotFound
 from ..errors import _bad, _timeout
 from ..tooling import ToolRegistry
 
@@ -55,7 +56,7 @@ async def _log_chapters(client, tasks, args: Dict[str, Any]) -> dict:
     if not chapters:
         return {
             'ok': False,
-            'error_type': 'not_found',
+            'error_type': 'NotFound',
             'message': 'no recorded runs for this projectId/source',
             'hint': _ADDRESSING_HINT,
         }
@@ -117,10 +118,10 @@ async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
         )
     except asyncio.TimeoutError:
         return _timeout('log_traces timed out waiting for the engine', 'retry log_traces')
-    except KeyError:
+    except LogNotFound:
         return {
             'ok': False,
-            'error_type': 'not_found',
+            'error_type': 'NotFound',
             'message': f'chapter {chapter_begin_seq} not found or expired',
             'hint': _RETENTION_HINT,
         }
@@ -151,10 +152,10 @@ async def _log_trace(client, tasks, args: Dict[str, Any]) -> dict:
         )
     except asyncio.TimeoutError:
         return _timeout('log_trace timed out waiting for the engine', 'retry log_trace')
-    except KeyError:
+    except LogNotFound:
         return {
             'ok': False,
-            'error_type': 'trace_expired',
+            'error_type': 'TraceExpired',
             'message': f'trace {begin_seq} is below the retention horizon',
             'hint': _RETENTION_HINT,
         }

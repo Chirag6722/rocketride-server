@@ -401,3 +401,18 @@ async def test_deploy_update_inline_pipeline(fake_engine):
 
     assert result == {'ok': True, 'project_id': 'dep-1', 'updated': ['pipeline']}
     assert fake_engine.deploy_updated == [{'project_id': 'dep-1', 'pipeline': pipeline, 'schedule': None}]
+
+
+@pytest.mark.asyncio
+async def test_deploy_update_pipeline_and_schedule(fake_engine):
+    """Both fields at once: `updated` lists them in contract order."""
+    registry = ToolRegistry()
+    capability.register(registry)
+    pipeline = {'components': []}
+
+    result = await registry.handler('deploy_update')(
+        fake_engine, None, {'project_id': 'dep-1', 'pipeline': pipeline, 'schedule': '0 * * * *'}
+    )
+
+    assert result == {'ok': True, 'project_id': 'dep-1', 'updated': ['pipeline', 'schedule']}
+    assert fake_engine.deploy_updated == [{'project_id': 'dep-1', 'pipeline': pipeline, 'schedule': '0 * * * *'}]

@@ -36,35 +36,10 @@ async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
         assert client.protocol_version == '2026-07-28'
 
         result = await client.list_tools()
+        from .conftest import EXPECTED_TOOL_NAMES
+
         names = [t.name for t in result.tools]
-        assert set(names) == {
-            'list_components',
-            'describe_component',
-            'validate_pipeline',
-            'describe_pipeline',
-            'run_pipeline',
-            'run_dropper_pipe',
-            'send_data',
-            'terminate',
-            'send_files',
-            'store_read',
-            'store_list',
-            'store_stat',
-            'store_get_url',
-            'save_template',
-            'load_template',
-            'deploy_add',
-            'deploy_list',
-            'deploy_status',
-            'deploy_remove',
-            'deploy_update',
-            'monitor',
-            'list_running_pipelines',
-            'log_chapters',
-            'log_read',
-            'log_traces',
-            'log_trace',
-        }
+        assert set(names) == set(EXPECTED_TOOL_NAMES)
         # Order pin (see also test_cache_policy.py::test_list_tools_order_is_deterministic_and_pinned).
         assert names[0] == 'list_components'
         assert names[-1] == 'log_trace'
@@ -192,8 +167,10 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
     captured = {}
     real_build_mcp_server = mcp_module.build_mcp_server
 
-    def _capturing_build_mcp_server(engine_factory, task_registry=None):
-        server = real_build_mcp_server(engine_factory, task_registry)
+    def _capturing_build_mcp_server(*args, **kwargs):
+        # Forward everything unchanged: build_mcp_server also takes `registry`
+        # and `apps_dir`; a fixed 2-arg wrapper would misroute them.
+        server = real_build_mcp_server(*args, **kwargs)
         captured['server'] = server
         return server
 

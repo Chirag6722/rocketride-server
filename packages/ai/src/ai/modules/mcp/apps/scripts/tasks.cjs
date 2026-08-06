@@ -20,9 +20,13 @@ const { execCommand, removeDir, hasBuildInputChanged, saveSourceHash, setState, 
 const APP_ROOT = path.join(__dirname, '..');
 const DIST_DIR = path.join(APP_ROOT, 'dist');
 
-// Build inputs: own src + package.json
+// Build inputs: own src + the toolchain files that shape the output
+// (vite.config.ts changes the entry/target/outDir; tsconfig.json changes
+// emitted syntax) — a config-only change must not reuse stale widget HTML.
 const SRC_DIR = path.join(APP_ROOT, 'src');
 const PKG_JSON = path.join(APP_ROOT, 'package.json');
+const VITE_CONFIG = path.join(APP_ROOT, 'vite.config.ts');
+const TS_CONFIG = path.join(APP_ROOT, 'tsconfig.json');
 const BUILD_HASH_KEY = 'mcp-widgets.buildHash';
 
 const WIDGETS = ['pipelines-table', 'dropper'];
@@ -39,7 +43,7 @@ function makeBundleAction() {
 	return {
 		run: async (ctx, task) => {
 			// Fingerprint inputs before building so concurrent edits are detected on the next run.
-			const { changed, hash } = await hasBuildInputChanged(BUILD_HASH_KEY, [SRC_DIR], [PKG_JSON]);
+			const { changed, hash } = await hasBuildInputChanged(BUILD_HASH_KEY, [SRC_DIR], [PKG_JSON, VITE_CONFIG, TS_CONFIG]);
 			if (!ctx.options.force && !changed && (await exists(DIST_DIR))) {
 				task.output = 'No changes detected';
 				return;

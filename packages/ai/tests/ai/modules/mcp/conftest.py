@@ -6,6 +6,44 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[4] / 'src'))
 
 import pytest
 
+# The full expected MCP tool surface, in registration order (register_all:
+# introspection, execution, capability, visibility, logs). Single source of
+# truth for the suite — assert against this instead of copying the list or
+# hard-coding its count in individual test files.
+EXPECTED_TOOL_NAMES = (
+    # introspection
+    'list_components',
+    'describe_component',
+    'validate_pipeline',
+    'describe_pipeline',
+    # execution
+    'run_pipeline',
+    'run_dropper_pipe',
+    'send_data',
+    'terminate',
+    'send_files',
+    # capability
+    'store_read',
+    'store_list',
+    'store_stat',
+    'store_get_url',
+    'save_template',
+    'load_template',
+    'deploy_add',
+    'deploy_list',
+    'deploy_status',
+    'deploy_remove',
+    'deploy_update',
+    # visibility
+    'monitor',
+    'list_running_pipelines',
+    # logs
+    'log_chapters',
+    'log_read',
+    'log_traces',
+    'log_trace',
+)
+
 
 class FakeEngineClient:
     def __init__(
@@ -201,24 +239,60 @@ class FakeEngineClient:
     async def add_monitor(self, key, types):
         self.add_monitor_calls.append((key, types))
 
+    # The four log seam fakes behave uniformly: calls are recorded as dicts
+    # (so assertions name fields, not tuple positions), and a scripted
+    # Exception result is raised rather than returned.
+
     async def log_chapters(self, project_id, source, run_kind='dev'):
-        self.log_calls.append(('chapters', project_id, source, run_kind))
+        self.log_calls.append({'method': 'chapters', 'project_id': project_id, 'source': source, 'run_kind': run_kind})
+        if isinstance(self.log_chapters_result, Exception):
+            raise self.log_chapters_result
         return self.log_chapters_result
 
     async def log_read(
         self, project_id, source, run_kind='dev', *, from_seq=None, cursor=None, max_events=None, types=None
     ):
-        self.log_calls.append(('read', project_id, source, run_kind, from_seq, cursor, max_events, types))
+        self.log_calls.append(
+            {
+                'method': 'read',
+                'project_id': project_id,
+                'source': source,
+                'run_kind': run_kind,
+                'from_seq': from_seq,
+                'cursor': cursor,
+                'max_events': max_events,
+                'types': types,
+            }
+        )
+        if isinstance(self.log_read_result, Exception):
+            raise self.log_read_result
         return self.log_read_result
 
     async def log_traces(self, project_id, source, run_kind='dev', *, n=20, chapter_begin_seq=None):
-        self.log_calls.append(('traces', project_id, source, run_kind, n, chapter_begin_seq))
+        self.log_calls.append(
+            {
+                'method': 'traces',
+                'project_id': project_id,
+                'source': source,
+                'run_kind': run_kind,
+                'n': n,
+                'chapter_begin_seq': chapter_begin_seq,
+            }
+        )
         if isinstance(self.log_traces_result, Exception):
             raise self.log_traces_result
         return self.log_traces_result
 
     async def log_trace(self, project_id, source, run_kind='dev', *, begin_seq=0):
-        self.log_calls.append(('trace', project_id, source, run_kind, begin_seq))
+        self.log_calls.append(
+            {
+                'method': 'trace',
+                'project_id': project_id,
+                'source': source,
+                'run_kind': run_kind,
+                'begin_seq': begin_seq,
+            }
+        )
         if isinstance(self.log_trace_result, Exception):
             raise self.log_trace_result
         return self.log_trace_result

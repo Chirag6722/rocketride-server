@@ -1,5 +1,6 @@
 # Copyright 2026 Aparavi Software AG. MIT License.
-"""Tests for the visibility tool (`tools/visibility.py`): `monitor`.
+"""Tests for the visibility tools (`tools/visibility.py`): `monitor` and
+`list_running_pipelines`.
 
 `monitor` is a **bounded poll** of `get_task_status` (not event streaming --
 see tool-specs.md Visibility section for why the original event-based design
@@ -43,12 +44,15 @@ def test_visibility_register_binds_handler_directly():
     assert registry.handler('monitor') is not None
 
 
-def test_register_all_yields_twenty_six_tools_total():
+def test_register_all_yields_the_expected_tool_surface():
     registry = ToolRegistry()
 
     register_all(registry)
 
-    assert len(registry.names()) == 26
+    from .conftest import EXPECTED_TOOL_NAMES
+
+    # A set diff names the tool that changed, unlike a bare count.
+    assert set(registry.names()) == set(EXPECTED_TOOL_NAMES)
 
 
 # --- monitor -------------------------------------------------------------
@@ -258,3 +262,33 @@ def test_list_running_pipelines_registered():
     visibility.register(registry)
 
     assert 'list_running_pipelines' in set(registry.names())
+
+
+@pytest.mark.asyncio
+async def test_monitor_clamps_poll_parameters(fake_engine, monkeypatch):
+    """`interval: 0` (or negative) must not busy-loop, and an oversized
+    `timeout` is capped — pins the clamps on the caller-supplied bounds.
+    """
+    slept = []
+
+    async def _record_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, 'sleep', _record_sleep)
+    # Two non-terminal polls, then terminal so the loop exits.
+    fake_engine._task_statuses = [
+        {'state': 3, 'completed': False},
+        {'state': 3, 'completed': False},
+        {'state': 5, 'completed': True},
+    ]
+
+    registry = ToolRegistry()
+    visibility.register(registry)
+
+    result = await registry.handler('monitor')(
+        fake_engine, TaskRegistry(), {'task_token': 'tok-1', 'timeout': 999999, 'interval': 0}
+    )
+
+    assert result['ok'] is True
+    assert slept, 'expected at least one inter-poll sleep'
+    assert all(s >= visibility.MIN_INTERVAL_SECONDS for s in slept)

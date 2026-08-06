@@ -2,6 +2,7 @@
 """In-process Streamable-HTTP MCP server module."""
 
 import contextlib
+import logging
 import os
 from typing import Any, Dict
 
@@ -125,9 +126,13 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
                 await _prev_startup()
 
         async def _chained_shutdown() -> None:
-            if _prev_shutdown is not None:
-                await _prev_shutdown()
-            await _shutdown()
+            # finally: a failing earlier hook must not leave the session
+            # manager and shared EngineClient open during partial shutdown.
+            try:
+                if _prev_shutdown is not None:
+                    await _prev_shutdown()
+            finally:
+                await _shutdown()
 
         server._user_startup = _chained_startup
         server._user_shutdown = _chained_shutdown
@@ -140,6 +145,18 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
     # FakeServer / test double: keeps a plain `public` set.
     # ------------------------------------------------------------------
     dev_no_auth = bool(config.get('mcp_dev_no_auth')) or os.environ.get('MCP_DEV_NO_AUTH') == '1'
+    if dev_no_auth:
+        # Loopback-only: the tools accept unrestricted filepaths, so an
+        # unauthenticated /mcp on a public bind is remote file access.
+        # Refuse the bypass (auth stays on) rather than fail engine boot.
+        server_config = getattr(server, 'config', None) or {}
+        bind_host = str(server_config.get('host', config.get('host', 'localhost')) or 'localhost')
+        if bind_host not in ('localhost', '127.0.0.1', '::1'):
+            logging.getLogger(__name__).warning(
+                'MCP_DEV_NO_AUTH ignored: server binds %s (non-loopback); /mcp stays authenticated',
+                bind_host,
+            )
+            dev_no_auth = False
     if dev_no_auth:
         if hasattr(server, '_public_paths'):
             server._public_paths.append(_MOUNT_PATH)

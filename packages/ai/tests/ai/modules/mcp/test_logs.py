@@ -3,6 +3,7 @@ import asyncio
 
 import pytest
 
+from ai.modules.mcp.engine import LogNotFound
 from ai.modules.mcp.tooling import ToolRegistry
 from ai.modules.mcp.tools import logs
 
@@ -14,8 +15,9 @@ def _registry():
 
 
 def test_register_adds_four_log_tools():
-    names = set(_registry().names())
-    assert {'log_chapters', 'log_read', 'log_traces', 'log_trace'} <= names
+    # Equality, not subset: _registry() registers only the logs group, so an
+    # accidental extra registration must fail here.
+    assert set(_registry().names()) == {'log_chapters', 'log_read', 'log_traces', 'log_trace'}
 
 
 @pytest.mark.asyncio
@@ -27,7 +29,9 @@ async def test_log_chapters_happy_path(fake_engine):
     result = await logs._log_chapters(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
     assert result['ok'] is True
     assert result['chapters'][0]['outcome'] == 'completed'
-    assert ('chapters', 'p1', 's1', 'dev') in fake_engine.log_calls
+    call = fake_engine.log_calls[0]
+    assert call['method'] == 'chapters'
+    assert (call['project_id'], call['source'], call['run_kind']) == ('p1', 's1', 'dev')
 
 
 @pytest.mark.asyncio
@@ -42,22 +46,19 @@ async def test_log_chapters_requires_project_and_source(fake_engine):
 @pytest.mark.asyncio
 async def test_log_chapters_empty_returns_not_found(fake_engine):
     """Finding 2: an unknown projectId/source (no chapters at all) maps to
-    error_type 'not_found', not ok:True + note.
+    error_type 'NotFound', not ok:True + note.
     """
     fake_engine.log_chapters_result = {'chapters': [], 'horizonSeq': 0}
     result = await logs._log_chapters(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
     assert result['ok'] is False
-    assert result['error_type'] == 'not_found'
+    assert result['error_type'] == 'NotFound'
     assert 'no recorded runs' in result['message']
     assert 'run_pipeline' in result['hint'] and 'run_dropper_pipe' in result['hint']
 
 
 @pytest.mark.asyncio
 async def test_log_chapters_timeout_returns_timeout_envelope(fake_engine):
-    async def _raise(*args, **kwargs):
-        raise asyncio.TimeoutError()
-
-    fake_engine.log_chapters = _raise
+    fake_engine.log_chapters_result = asyncio.TimeoutError()
     result = await logs._log_chapters(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
     assert result['ok'] is False
     assert result['error_type'] == 'Timeout'
@@ -74,8 +75,8 @@ async def test_log_read_caps_page_and_forwards_cursor(fake_engine):
     assert result['ok'] is True
     assert result['nextCursor'] == 42
     call = fake_engine.log_calls[0]
-    assert call[0] == 'read'
-    assert call[6] == logs.LOG_READ_MAX_EVENTS  # 5000 clamped to the cap
+    assert call['method'] == 'read'
+    assert call['max_events'] == logs.LOG_READ_MAX_EVENTS  # 5000 clamped to the cap
 
 
 @pytest.mark.asyncio
@@ -84,16 +85,12 @@ async def test_log_read_floors_non_positive_max_events(fake_engine):
     fake_engine.log_read_result = {'events': [], 'nextSeq': None}
     result = await logs._log_read(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'maxEvents': -5})
     assert result['ok'] is True
-    call = fake_engine.log_calls[0]
-    assert call[6] == 1
+    assert fake_engine.log_calls[0]['max_events'] == 1
 
 
 @pytest.mark.asyncio
 async def test_log_read_timeout_returns_timeout_envelope(fake_engine):
-    async def _raise(*args, **kwargs):
-        raise asyncio.TimeoutError()
-
-    fake_engine.log_read = _raise
+    fake_engine.log_read_result = asyncio.TimeoutError()
     result = await logs._log_read(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
     assert result['ok'] is False
     assert result['error_type'] == 'Timeout'
@@ -142,21 +139,32 @@ async def test_log_traces_chapter_begin_seq_happy_path(fake_engine):
     assert result['ok'] is True
     assert result['traces'] == [{'beginSeq': 42, 'outcome': 'completed'}]
     call = fake_engine.log_calls[0]
-    assert call[0] == 'traces'
-    assert call[-1] == 10  # chapter_begin_seq forwarded
+    assert call['method'] == 'traces'
+    assert call['chapter_begin_seq'] == 10  # forwarded
 
 
 @pytest.mark.asyncio
 async def test_log_traces_unknown_chapter_begin_seq_maps_to_not_found(fake_engine):
-    """Finding 3: a KeyError from the seam (unknown chapterBeginSeq) maps to
-    a 'not_found' envelope, mirroring log_trace's trace_expired mapping.
+    """Finding 3: a LogNotFound from the seam (unknown chapterBeginSeq) maps to
+    a 'NotFound' envelope, mirroring log_trace's TraceExpired mapping.
     """
-    fake_engine.log_traces_result = KeyError(999)
+    fake_engine.log_traces_result = LogNotFound(999)
     result = await logs._log_traces(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'chapterBeginSeq': 999})
     assert result['ok'] is False
-    assert result['error_type'] == 'not_found'
+    assert result['error_type'] == 'NotFound'
     assert '999' in result['message']
     assert 'hint' in result
+
+
+@pytest.mark.asyncio
+async def test_log_traces_unrelated_keyerror_is_not_swallowed(fake_engine):
+    """The narrowed catch: a plain KeyError from an incidental dict lookup in
+    the seam must propagate (and be normalized by the dispatch layer), not be
+    misreported as an expected retention condition.
+    """
+    fake_engine.log_traces_result = KeyError('incidental')
+    with pytest.raises(KeyError):
+        await logs._log_traces(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'chapterBeginSeq': 1})
 
 
 @pytest.mark.asyncio
@@ -164,34 +172,31 @@ async def test_log_traces_clamps_n_to_valid_range(fake_engine):
     """Finding 5: n is clamped to 1..100 (default 20)."""
     fake_engine.log_traces_result = {'open': [], 'closed': []}
     await logs._log_traces(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'n': 5000})
-    assert fake_engine.log_calls[0][4] == logs.LOG_TRACES_MAX_N
+    assert fake_engine.log_calls[0]['n'] == logs.LOG_TRACES_MAX_N
 
     fake_engine.log_calls.clear()
     await logs._log_traces(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'n': -5})
-    assert fake_engine.log_calls[0][4] == logs.LOG_TRACES_MIN_N
+    assert fake_engine.log_calls[0]['n'] == logs.LOG_TRACES_MIN_N
 
     fake_engine.log_calls.clear()
     await logs._log_traces(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
-    assert fake_engine.log_calls[0][4] == logs.LOG_TRACES_DEFAULT_N
+    assert fake_engine.log_calls[0]['n'] == logs.LOG_TRACES_DEFAULT_N
 
 
 @pytest.mark.asyncio
 async def test_log_traces_timeout_returns_timeout_envelope(fake_engine):
-    async def _raise(*args, **kwargs):
-        raise asyncio.TimeoutError()
-
-    fake_engine.log_traces = _raise
+    fake_engine.log_traces_result = asyncio.TimeoutError()
     result = await logs._log_traces(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
     assert result['ok'] is False
     assert result['error_type'] == 'Timeout'
 
 
 @pytest.mark.asyncio
-async def test_log_trace_maps_keyerror_to_trace_expired(fake_engine):
-    fake_engine.log_trace_result = KeyError(99)
+async def test_log_trace_maps_log_not_found_to_trace_expired(fake_engine):
+    fake_engine.log_trace_result = LogNotFound(99)
     result = await logs._log_trace(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'beginSeq': 99})
     assert result['ok'] is False
-    assert result['error_type'] == 'trace_expired'
+    assert result['error_type'] == 'TraceExpired'
 
 
 @pytest.mark.asyncio
@@ -213,10 +218,7 @@ async def test_log_trace_requires_begin_seq(fake_engine):
 
 @pytest.mark.asyncio
 async def test_log_trace_timeout_returns_timeout_envelope(fake_engine):
-    async def _raise(*args, **kwargs):
-        raise asyncio.TimeoutError()
-
-    fake_engine.log_trace = _raise
+    fake_engine.log_trace_result = asyncio.TimeoutError()
     result = await logs._log_trace(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'beginSeq': 1})
     assert result['ok'] is False
     assert result['error_type'] == 'Timeout'

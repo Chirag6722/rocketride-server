@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 from ..errors import _bad
 from ..tooling import ToolRegistry
-from ._common import load_pipeline
+from ._common import load_pipeline_async
 
 _PIPELINE_OR_FILEPATH_SCHEMA = {
     'type': 'object',
@@ -48,19 +48,19 @@ async def _describe_component(client, tasks, args: Dict[str, Any]) -> dict:
     if service is None:
         return _bad(f'Unknown component: {name}', 'call list_components for valid names')
 
-    return {'ok': True, **service}
+    return {**service, 'ok': True}
 
 
 async def _validate_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
-    pipeline = load_pipeline(args)  # raises ValueError -> normalized by the dispatch layer
-    result = await client.validate(pipeline)
+    pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
+    result = (await client.validate(pipeline)) or {}
     errors = result.get('errors') or []
     warnings = result.get('warnings') or []
     return {'ok': not errors, 'errors': errors, 'warnings': warnings}
 
 
 async def _describe_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
-    pipeline = load_pipeline(args)  # raises ValueError -> normalized by the dispatch layer
+    pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
 
     service_cache: Dict[str, Any] = {}
     components = []
@@ -115,7 +115,7 @@ def register(registry: ToolRegistry) -> None:
 
     registry.register(
         'validate_pipeline',
-        'Validate a pipeline against the engine own rules (zero client-side rules -- zero drift).',
+        "Validate a pipeline against the engine's own rules (zero client-side rules -- zero drift).",
         _PIPELINE_OR_FILEPATH_SCHEMA,
     )(_validate_pipeline)
 

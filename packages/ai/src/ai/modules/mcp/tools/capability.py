@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from ..errors import _bad
 from ..tooling import ToolRegistry
-from ._common import load_pipeline
+from ._common import load_pipeline_async
 
 _PIPELINE_OR_FILEPATH_SCHEMA_PROPS = {
     'pipeline': {'type': 'object', 'description': 'Inline pipeline definition'},
@@ -43,7 +43,7 @@ _STORE_GET_URL_SCHEMA = {
     'type': 'object',
     'properties': {
         'path': {'type': 'string', 'description': 'Store-relative file path'},
-        'expires_in': {'type': 'integer', 'description': 'URL lifetime in seconds (default 3600)'},
+        'expires_in': {'type': 'integer', 'minimum': 1, 'description': 'URL lifetime in seconds (default 3600)'},
         'download_name': {'type': 'string', 'description': 'Optional filename for the browser download'},
     },
     'required': ['path'],
@@ -127,7 +127,11 @@ async def _store_get_url(client, tasks, args: Dict[str, Any]) -> dict:
     if not path:
         return _bad('path is required', 'pass a store file path (see store_list)')
 
-    expires_in = args.get('expires_in') or 3600
+    expires_in = args.get('expires_in')
+    if expires_in is None:
+        expires_in = 3600
+    elif not isinstance(expires_in, int) or isinstance(expires_in, bool) or expires_in < 1:
+        return _bad('expires_in must be a positive integer', 'omit it to use the 3600-second default')
     url = await client.fs_get_url(path, expires_in=expires_in, download_name=args.get('download_name'))
     return {'ok': True, 'path': path, 'url': url, 'expires_in': expires_in}
 
@@ -137,7 +141,7 @@ async def _save_template(client, tasks, args: Dict[str, Any]) -> dict:
     if not template_id:
         return _bad('template_id is required', 'name the template')
 
-    pipeline = load_pipeline(args)  # raises ValueError -> normalized by the dispatch layer
+    pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
     await client.save_template(template_id, pipeline)
     return {'ok': True, 'template_id': template_id}
 
@@ -156,7 +160,7 @@ async def _load_template(client, tasks, args: Dict[str, Any]) -> dict:
 
 
 async def _deploy_add(client, tasks, args: Dict[str, Any]) -> dict:
-    pipeline = load_pipeline(args)  # raises ValueError -> normalized by the dispatch layer
+    pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
     deployment = await client.deploy_add(pipeline, schedule=args.get('schedule'))
     return {'ok': True, 'deployment': deployment}
 
@@ -191,7 +195,7 @@ async def _deploy_update(client, tasks, args: Dict[str, Any]) -> dict:
 
     pipeline = None
     if args.get('pipeline') or args.get('filepath'):
-        pipeline = load_pipeline(args)  # raises ValueError -> normalized by the dispatch layer
+        pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
     schedule = args.get('schedule')
     if pipeline is None and schedule is None:
         return _bad('nothing to update', 'pass a replacement pipeline/filepath and/or a schedule')

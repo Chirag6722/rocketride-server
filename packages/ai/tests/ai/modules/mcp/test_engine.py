@@ -226,7 +226,7 @@ class _FakeUnderlyingClient:
         return 'https://signed.example/f?sig=abc'
 
 
-def _make_client_with_fake(monkeypatch):
+def _make_client_with_fake():
     """Build a real WsEngineClient (no network) and swap in the fake underlying client."""
     from ai.modules.mcp.engine import WsEngineClient
 
@@ -236,8 +236,8 @@ def _make_client_with_fake(monkeypatch):
     return client, fake
 
 
-async def test_ensure_connected_memoizes_across_sequential_calls(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_ensure_connected_memoizes_across_sequential_calls():
+    client, fake = _make_client_with_fake()
 
     await client.list_tasks()
     await client.list_tasks()
@@ -247,8 +247,8 @@ async def test_ensure_connected_memoizes_across_sequential_calls(monkeypatch):
     assert client._connected is True
 
 
-async def test_ensure_connected_memoizes_under_concurrent_calls(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_ensure_connected_memoizes_under_concurrent_calls():
+    client, fake = _make_client_with_fake()
 
     await asyncio.gather(client.list_tasks(), client.list_tasks())
 
@@ -256,8 +256,8 @@ async def test_ensure_connected_memoizes_under_concurrent_calls(monkeypatch):
     assert client._connected is True
 
 
-async def test_close_disconnects_when_connected(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_close_disconnects_when_connected():
+    client, fake = _make_client_with_fake()
 
     await client.list_tasks()
     assert client._connected is True
@@ -268,8 +268,8 @@ async def test_close_disconnects_when_connected(monkeypatch):
     assert client._connected is False
 
 
-async def test_close_is_noop_when_never_connected(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_close_is_noop_when_never_connected():
+    client, fake = _make_client_with_fake()
 
     await client.close()
 
@@ -277,8 +277,8 @@ async def test_close_is_noop_when_never_connected(monkeypatch):
     assert client._connected is False
 
 
-async def test_close_is_idempotent_when_called_twice(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_close_is_idempotent_when_called_twice():
+    client, fake = _make_client_with_fake()
 
     await client.list_tasks()
     await client.close()
@@ -288,8 +288,8 @@ async def test_close_is_idempotent_when_called_twice(monkeypatch):
     assert client._connected is False
 
 
-async def test_get_services_calls_sdk(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_get_services_calls_sdk():
+    client, fake = _make_client_with_fake()
 
     result = await client.get_services()
 
@@ -297,8 +297,8 @@ async def test_get_services_calls_sdk(monkeypatch):
     assert result == {'services': {'ocr': {}}, 'version': 'x'}
 
 
-async def test_get_service_calls_sdk_with_name(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_get_service_calls_sdk_with_name():
+    client, fake = _make_client_with_fake()
 
     result = await client.get_service('ocr')
 
@@ -306,8 +306,8 @@ async def test_get_service_calls_sdk_with_name(monkeypatch):
     assert result == {'name': 'ocr'}
 
 
-async def test_validate_calls_sdk_with_pipeline_and_source(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_validate_calls_sdk_with_pipeline_and_source():
+    client, fake = _make_client_with_fake()
     pipeline = {'components': []}
 
     result = await client.validate(pipeline, source='file.pipe')
@@ -316,16 +316,16 @@ async def test_validate_calls_sdk_with_pipeline_and_source(monkeypatch):
     assert result == {'valid': True}
 
 
-async def test_validate_defaults_source_to_none(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_validate_defaults_source_to_none():
+    client, fake = _make_client_with_fake()
 
     await client.validate({'components': []})
 
     assert fake.validate_calls == [{'pipeline': {'components': []}, 'source': None}]
 
 
-async def test_use_passes_full_kwargs_and_returns_dict(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_use_passes_full_kwargs_and_returns_dict():
+    client, fake = _make_client_with_fake()
 
     result = await client.use(filepath='p.pipe', ttl=30, env={'X': '1'}, name='n')
 
@@ -333,11 +333,11 @@ async def test_use_passes_full_kwargs_and_returns_dict(monkeypatch):
     assert result == {'token': 'tok', 'filepath': 'p.pipe', 'ttl': 30, 'env': {'X': '1'}, 'name': 'n'}
 
 
-async def test_send_forwards_objinfo_mimetype(monkeypatch):
+async def test_send_forwards_objinfo_mimetype():
     """The seam's `send` must forward `objinfo`/`mimetype`/`on_sse` through to
     the underlying SDK client unchanged, not just `token`/`data`.
     """
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     def _on_sse(_event):  # pragma: no cover - identity/passthrough check only
         pass
@@ -350,8 +350,8 @@ async def test_send_forwards_objinfo_mimetype(monkeypatch):
     assert result == {'ok': True}
 
 
-async def test_terminate_calls_sdk_with_token(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_terminate_calls_sdk_with_token():
+    client, fake = _make_client_with_fake()
 
     result = await client.terminate('tok-1')
 
@@ -359,9 +359,9 @@ async def test_terminate_calls_sdk_with_token(monkeypatch):
     assert result is None
 
 
-async def test_send_files_passes_files_then_token(monkeypatch):
+async def test_send_files_passes_files_then_token():
     """Footgun: SDK arg order is (files, token) — token second, not first."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
     files = ['/tmp/a.pdf', ('/tmp/b.pdf', {'name': 'b'})]
 
     result = await client.send_files(files, 'tok-2')
@@ -370,8 +370,8 @@ async def test_send_files_passes_files_then_token(monkeypatch):
     assert result == {'uploaded': 2}
 
 
-async def test_fs_read_string_calls_sdk_with_path(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_fs_read_string_calls_sdk_with_path():
+    client, fake = _make_client_with_fake()
 
     result = await client.fs_read_string('/store/a.txt')
 
@@ -379,9 +379,9 @@ async def test_fs_read_string_calls_sdk_with_path(monkeypatch):
     assert result == 'contents'
 
 
-async def test_fs_list_dir_calls_sdk_not_fs_dir(monkeypatch):
+async def test_fs_list_dir_calls_sdk_not_fs_dir():
     """Footgun: real SDK method name is fs_list_dir, not fs_dir."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.fs_list_dir('/store')
 
@@ -389,16 +389,16 @@ async def test_fs_list_dir_calls_sdk_not_fs_dir(monkeypatch):
     assert result == {'entries': []}
 
 
-async def test_fs_list_dir_defaults_path_to_empty_string(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_fs_list_dir_defaults_path_to_empty_string():
+    client, fake = _make_client_with_fake()
 
     await client.fs_list_dir()
 
     assert fake.fs_list_dir_calls == ['']
 
 
-async def test_save_template_calls_sdk_with_id_and_pipeline(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_save_template_calls_sdk_with_id_and_pipeline():
+    client, fake = _make_client_with_fake()
     pipeline = {'components': []}
 
     result = await client.save_template('tpl-1', pipeline)
@@ -407,8 +407,8 @@ async def test_save_template_calls_sdk_with_id_and_pipeline(monkeypatch):
     assert result is None
 
 
-async def test_get_template_calls_sdk_with_id(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_get_template_calls_sdk_with_id():
+    client, fake = _make_client_with_fake()
 
     result = await client.get_template('tpl-1')
 
@@ -416,9 +416,9 @@ async def test_get_template_calls_sdk_with_id(monkeypatch):
     assert result == {'template_id': 'tpl-1'}
 
 
-async def test_deploy_add_passes_schedule_as_keyword(monkeypatch):
+async def test_deploy_add_passes_schedule_as_keyword():
     """Footgun: client.deploy.add(pipeline, schedule=schedule) — schedule is keyword-only."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
     pipeline = {'components': []}
 
     result = await client.deploy_add(pipeline, schedule='0/15 * * * *')
@@ -427,17 +427,17 @@ async def test_deploy_add_passes_schedule_as_keyword(monkeypatch):
     assert result == {'project_id': 'dep-1'}
 
 
-async def test_deploy_add_defaults_schedule_to_none(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_deploy_add_defaults_schedule_to_none():
+    client, fake = _make_client_with_fake()
 
     await client.deploy_add({'components': []})
 
     assert fake.deploy.add_calls == [{'pipeline': {'components': []}, 'schedule': None}]
 
 
-async def test_deploy_list_calls_sdk(monkeypatch):
+async def test_deploy_list_calls_sdk():
     """Footgun: seam calls client.deploy.list() (sub-API), not a top-level method."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.deploy_list()
 
@@ -445,8 +445,8 @@ async def test_deploy_list_calls_sdk(monkeypatch):
     assert result == [{'project_id': 'dep-1'}]
 
 
-async def test_get_task_status_calls_sdk_with_token(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_get_task_status_calls_sdk_with_token():
+    client, fake = _make_client_with_fake()
 
     result = await client.get_task_status('tok-3')
 
@@ -454,8 +454,8 @@ async def test_get_task_status_calls_sdk_with_token(monkeypatch):
     assert result == {'state': 5, 'completed': True}
 
 
-async def test_fs_stat_calls_sdk_with_path(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_fs_stat_calls_sdk_with_path():
+    client, fake = _make_client_with_fake()
 
     result = await client.fs_stat('a/b.txt')
 
@@ -463,8 +463,8 @@ async def test_fs_stat_calls_sdk_with_path(monkeypatch):
     assert result == {'exists': True, 'type': 'file', 'size': 12, 'modified': 1700000000}
 
 
-async def test_fs_get_url_passes_expires_in_and_download_name(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_fs_get_url_passes_expires_in_and_download_name():
+    client, fake = _make_client_with_fake()
 
     result = await client.fs_get_url('a/b.txt', expires_in=60, download_name='x.txt')
 
@@ -472,17 +472,17 @@ async def test_fs_get_url_passes_expires_in_and_download_name(monkeypatch):
     assert result == 'https://signed.example/f?sig=abc'
 
 
-async def test_fs_get_url_defaults_expires_in_and_download_name(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_fs_get_url_defaults_expires_in_and_download_name():
+    client, fake = _make_client_with_fake()
 
     await client.fs_get_url('a/b.txt')
 
     assert fake.fs_get_url_calls == [{'path': 'a/b.txt', 'expires_in': 3600, 'download_name': None}]
 
 
-async def test_deploy_status_calls_sdk_namespace(monkeypatch):
+async def test_deploy_status_calls_sdk_namespace():
     """Footgun: seam calls client.deploy.status(project_id) (sub-API), not a top-level method."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.deploy_status('dep-1')
 
@@ -490,9 +490,9 @@ async def test_deploy_status_calls_sdk_namespace(monkeypatch):
     assert result == {'project_id': 'dep-1', 'state': 'active'}
 
 
-async def test_deploy_remove_calls_sdk_namespace(monkeypatch):
+async def test_deploy_remove_calls_sdk_namespace():
     """Footgun: seam calls client.deploy.remove(project_id) (sub-API), not a top-level method."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.deploy_remove('dep-1')
 
@@ -500,9 +500,9 @@ async def test_deploy_remove_calls_sdk_namespace(monkeypatch):
     assert result is None
 
 
-async def test_deploy_update_passes_pipeline_and_schedule_as_keywords(monkeypatch):
+async def test_deploy_update_passes_pipeline_and_schedule_as_keywords():
     """Footgun: client.deploy.update(project_id, pipeline=..., schedule=...) — keyword-only kwargs."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
     pipeline = {'components': []}
 
     result = await client.deploy_update('dep-1', pipeline=pipeline, schedule='0 * * * *')
@@ -511,8 +511,8 @@ async def test_deploy_update_passes_pipeline_and_schedule_as_keywords(monkeypatc
     assert result is None
 
 
-async def test_deploy_update_defaults_pipeline_and_schedule_to_none(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_deploy_update_defaults_pipeline_and_schedule_to_none():
+    client, fake = _make_client_with_fake()
 
     await client.deploy_update('dep-1')
 
@@ -527,9 +527,9 @@ def test_base_url_normalizes_scheme_and_strips_trailing_slash():
     assert WsEngineClient(uri='http://localhost:5565', auth='k').base_url == 'http://localhost:5565'
 
 
-async def test_log_chapters_calls_sdk_with_args(monkeypatch):
+async def test_log_chapters_calls_sdk_with_args():
     """log_chapters forwards project_id, source, run_kind and returns the SDK dict."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.log_chapters('proj-1', 'source-a', 'prod')
 
@@ -537,17 +537,17 @@ async def test_log_chapters_calls_sdk_with_args(monkeypatch):
     assert result == {'project_id': 'proj-1', 'chapters': []}
 
 
-async def test_log_chapters_defaults_run_kind_to_dev(monkeypatch):
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_log_chapters_defaults_run_kind_to_dev():
+    client, fake = _make_client_with_fake()
 
     await client.log_chapters('proj-1', 'source-a')
 
     assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'dev'}]
 
 
-async def test_log_read_forwards_keyword_args(monkeypatch):
+async def test_log_read_forwards_keyword_args():
     """log_read forwards all keyword args through to the SDK."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.log_read(
         'proj-1', 'source-a', 'prod', from_seq=10, cursor=20, max_events=50, types=['task_start']
@@ -567,13 +567,13 @@ async def test_log_read_forwards_keyword_args(monkeypatch):
     assert result == {'project_id': 'proj-1', 'events': []}
 
 
-async def test_log_traces_seeks_live_calls_get_traces_closes_finally(monkeypatch):
+async def test_log_traces_seeks_live_calls_get_traces_closes_finally():
     """log_traces seeks 'live', calls get_traces(n), and ALWAYS closes the session.
 
     The seam is a faithful transport: it returns the SDK's raw nested
     ``{'open': [...], 'closed': [...]}`` shape verbatim, no flattening.
     """
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.log_traces('proj-1', 'source-a', 'prod', n=10)
 
@@ -584,12 +584,12 @@ async def test_log_traces_seeks_live_calls_get_traces_closes_finally(monkeypatch
     assert result == {'open': [{'seq': 1, 'kind': 'open-trace'}], 'closed': [{'seq': 2, 'kind': 'closed-trace'}]}
 
 
-async def test_log_traces_with_chapter_begin_seq_seeks_chapter_end_time(monkeypatch):
+async def test_log_traces_with_chapter_begin_seq_seeks_chapter_end_time():
     """Finding 1: chapter_begin_seq looks up the matching chapter via
     log.chapters() and seeks its endTime (a closed chapter) rather than
     'live'.
     """
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
     fake.log.chapters_result = {
         'chapters': [
             {'beginTime': 1.0, 'beginSeq': 10, 'endTime': 20.0, 'outcome': 'ok'},
@@ -606,9 +606,9 @@ async def test_log_traces_with_chapter_begin_seq_seeks_chapter_end_time(monkeypa
     assert result == {'open': [{'seq': 1, 'kind': 'open-trace'}], 'closed': [{'seq': 2, 'kind': 'closed-trace'}]}
 
 
-async def test_log_traces_with_chapter_begin_seq_seeks_live_when_chapter_open(monkeypatch):
+async def test_log_traces_with_chapter_begin_seq_seeks_live_when_chapter_open():
     """A chapter with no endTime is still open/live -- seek 'live', not None."""
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
     fake.log.chapters_result = {'chapters': [{'beginTime': 1.0, 'beginSeq': 10, 'endTime': None, 'outcome': None}]}
 
     await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=10)
@@ -616,11 +616,11 @@ async def test_log_traces_with_chapter_begin_seq_seeks_live_when_chapter_open(mo
     assert fake.log._session.seek_calls == ['live']
 
 
-async def test_log_traces_with_unknown_chapter_begin_seq_raises_keyerror(monkeypatch):
+async def test_log_traces_with_unknown_chapter_begin_seq_raises_keyerror():
     """No chapter matches chapter_begin_seq -> KeyError(chapter_begin_seq), and
     the session is still closed in the finally block.
     """
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
     fake.log.chapters_result = {'chapters': [{'beginTime': 1.0, 'beginSeq': 10, 'endTime': 20.0, 'outcome': 'ok'}]}
 
     with pytest.raises(KeyError, match='999'):
@@ -631,11 +631,11 @@ async def test_log_traces_with_unknown_chapter_begin_seq_raises_keyerror(monkeyp
     assert fake.log._session.close_calls == 1
 
 
-async def test_log_traces_defaults_chapter_begin_seq_to_none_seeks_live(monkeypatch):
+async def test_log_traces_defaults_chapter_begin_seq_to_none_seeks_live():
     """chapter_begin_seq is optional; omitting it keeps today's seek('live')
     behavior and never calls log.chapters().
     """
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     await client.log_traces('proj-1', 'source-a', 'prod', n=10)
 
@@ -643,13 +643,13 @@ async def test_log_traces_defaults_chapter_begin_seq_to_none_seeks_live(monkeypa
     assert fake.log._session.seek_calls == ['live']
 
 
-async def test_log_trace_seeks_live_calls_get_trace_closes_in_finally(monkeypatch):
+async def test_log_trace_seeks_live_calls_get_trace_closes_in_finally():
     """log_trace seeks 'live', calls get_trace(begin_seq), and closes in finally.
 
     The seam is a faithful transport: it returns the SDK's raw
     ``{'summary': {...}, 'events': [...]}`` shape verbatim, no unwrapping.
     """
-    client, fake = _make_client_with_fake(monkeypatch)
+    client, fake = _make_client_with_fake()
 
     result = await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
 
@@ -660,12 +660,16 @@ async def test_log_trace_seeks_live_calls_get_trace_closes_in_finally(monkeypatc
     assert result == {'summary': {'beginSeq': 5}, 'events': [{'seq': 5, 'kind': 'trace'}]}
 
 
-async def test_log_trace_closes_even_when_get_trace_raises_keyerror(monkeypatch):
-    """log_trace closes the session in finally block even when get_trace raises KeyError."""
-    client, fake = _make_client_with_fake(monkeypatch)
+async def test_log_trace_wraps_keyerror_and_closes_session():
+    """log_trace narrows the SDK's plain KeyError to LogNotFound and still
+    closes the session in the finally block.
+    """
+    from ai.modules.mcp.engine import LogNotFound
+
+    client, fake = _make_client_with_fake()
     fake.log._session._get_trace_raises = KeyError('not_found')
 
-    with pytest.raises(KeyError, match='not_found'):
+    with pytest.raises(LogNotFound):
         await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
 
     assert fake.log._session.close_calls == 1

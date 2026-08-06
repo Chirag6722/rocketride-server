@@ -98,7 +98,7 @@ on every `CacheableResult` this module returns:
 | `ROCKETRIDE_URI` | `engine.make_engine_client` | WS/DAP URI for the engine connection used by the v0 `EngineClient`. Required — missing it raises `ValueError` on first request. |
 | `ROCKETRIDE_AUTH` | `engine.make_engine_client` | Auth token for the engine connection. Falls back to `ROCKETRIDE_APIKEY` if unset. One of the two is required. |
 | `ROCKETRIDE_APIKEY` | `engine.make_engine_client` | Alternate name for the auth token; used only if `ROCKETRIDE_AUTH` is not set. |
-| `MCP_DEV_NO_AUTH=1` | `__init__.initModule` | Dev-only bypass: marks `/mcp` as a public route so the engine's `AuthMiddleware` skips it. Equivalent to setting the `mcp_dev_no_auth` config key. |
+| `MCP_DEV_NO_AUTH=1` | `__init__.initModule` | Dev-only bypass: marks `/mcp` as a public route so the engine's `AuthMiddleware` skips it. Equivalent to setting the `mcp_dev_no_auth` config key. Honored only when the server binds a loopback host (`localhost`/`127.0.0.1`/`::1`); on any other bind the bypass is ignored with a warning and `/mcp` stays authenticated. |
 
 Config key `mcp_dev_no_auth` (bool, in the module `config` dict passed to `initModule`)
 is the config-driven equivalent of `MCP_DEV_NO_AUTH=1`; either one enables the bypass.
@@ -199,10 +199,12 @@ Runs are keyed by `(projectId, source, runKind)`, addressed with the `projectId`
 `source` that `run_pipeline`/`run_dropper_pipe` now return (see Execution above),
 not by task token — the run log outlives the task. Retention is 7 days (dev) / 30
 days (deploy), or earlier under segment/chapter caps. An unrecognized `projectId`/
-`source` pair (no chapters at all) returns `error_type: 'not_found'` from
+`source` pair (no chapters at all) returns `error_type: 'NotFound'` from
 `log_chapters`; `log_traces` on an unrecognized `chapterBeginSeq` returns the same
-`'not_found'`; `log_trace` on an evicted `beginSeq` keeps its existing
-`error_type: 'trace_expired'`. Traces are gated by
+`'NotFound'`; `log_trace` on an evicted `beginSeq` returns
+`error_type: 'TraceExpired'` (PascalCase, like every other `error_type` on this
+surface). Both conditions are signaled by the seam's dedicated
+`engine.LogNotFound` exception, not a bare `KeyError`. Traces are gated by
 `pipelineTraceLevel` on the originating `run_pipeline`/`run_dropper_pipe` call
 (both tools now default it to `'summary'`): a run submitted with
 `pipelineTraceLevel: 'none'` still has chapters and console output, but
@@ -220,7 +222,7 @@ in-band timeout envelope (`error_type: 'Timeout'`) used by the execution tools
 (`tools/execution.py`), rather than letting a slow engine surface as a hard MCP
 error.
 
-Tool call dispatch (`handlers._call_tool`) looks up the handler by name in the
+Tool call dispatch (`handlers._on_call_tool`) looks up the handler by name in the
 registry and calls `await handler(engine_client, task_registry, arguments)`. Errors
 are normalized via `errors.normalize_error`: self-correctable failures come back as
 an in-band `{ok: False, error_type, message, hint}` result; hard failures
@@ -325,7 +327,9 @@ shared across event loops or accessed concurrently from multiple threads.
   `describe_pipeline`, `save_template`, `deploy_add`, and `deploy_update` all
   accept a `filepath` in place of an inline `pipeline`. For the
   introspection/capability tools this goes through `tools/_common.py`'s
-  `load_pipeline()`, which does a plain `open(filepath, ...)` on the engine
+  `load_pipeline()` (run in a worker thread via `load_pipeline_async` so the
+  read never blocks the event loop), which does a plain `open(filepath, ...)`
+  on the engine
   process's local filesystem — any path the process can read, it will read,
   with no root/prefix restriction. `run_pipeline`'s and `run_dropper_pipe`'s
   `filepath` are forwarded to the engine's own `use()` seam call, which
@@ -337,7 +341,9 @@ shared across event loops or accessed concurrently from multiple threads.
   ever be enabled on a **loopback bind (`127.0.0.1`)** — never on `0.0.0.0` or
   any other publicly reachable bind. Combining the auth bypass with a public
   bind would let anyone reach `/mcp` and read arbitrary server-local files via
-  any of the `filepath`-accepting tools.
+  any of the `filepath`-accepting tools. `initModule` now enforces this: on a
+  non-loopback bind the bypass is ignored (with a warning) and `/mcp` stays
+  authenticated.
 - **Path sandboxing is deferred, not solved.** It is intentionally not
   implemented in this module; the fix lands with the dropper-ingress seam
   (a future revision), which will own path resolution/allowlisting for all

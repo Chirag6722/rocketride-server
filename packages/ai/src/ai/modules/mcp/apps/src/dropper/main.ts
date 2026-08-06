@@ -247,6 +247,10 @@ function upload(files: FileList | File[]): void {
 
 function buildDropzone(prompt: string): HTMLElement {
 	const zone = el('div', 'dropzone', prompt);
+	// Keyboard accessibility: the zone is a div acting as a button, so give
+	// it button semantics, a tab stop, and Enter/Space activation.
+	zone.setAttribute('role', 'button');
+	zone.tabIndex = 0;
 	const picker = el('input') as HTMLInputElement;
 	picker.type = 'file';
 	picker.multiple = true;
@@ -254,6 +258,12 @@ function buildDropzone(prompt: string): HTMLElement {
 	picker.onchange = () => picker.files && upload(picker.files);
 	zone.appendChild(picker);
 	zone.onclick = () => picker.click();
+	zone.onkeydown = (e) => {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			picker.click();
+		}
+	};
 	zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('drag'); };
 	zone.ondragleave = () => zone.classList.remove('drag');
 	zone.ondrop = (e) => {

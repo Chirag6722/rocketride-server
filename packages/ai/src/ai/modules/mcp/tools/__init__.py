@@ -3,13 +3,8 @@
 
 ``register_all(registry)`` populates one shared ``ToolRegistry`` (built once
 in ``handlers.build_mcp_server``) by calling each tool module's own
-``register(registry)``. Later tasks append imports here, one per remaining
-tool group, e.g.:
-
-    from . import capability
-    capability.register(registry)
-    from . import visibility
-    visibility.register(registry)
+``register(registry)``. Add a new tool group by importing its module here
+and calling its ``register(registry)`` from ``register_all``.
 """
 
 from ..tooling import ToolRegistry
@@ -25,7 +20,8 @@ def register_all(registry: ToolRegistry) -> None:
 
     Wires the introspection tools (`list_components`, `describe_component`,
     `validate_pipeline`, `describe_pipeline`), the execution tools
-    (`run_pipeline`, `send_data`, `terminate`, `send_files`), the capability
+    (`run_pipeline`, `run_dropper_pipe`, `send_data`, `terminate`,
+    `send_files`), the capability
     tools (`store_read`, `store_list`, `store_stat`, `store_get_url`,
     `save_template`, `load_template`, `deploy_add`, `deploy_list`,
     `deploy_status`, `deploy_remove`, `deploy_update`), the visibility tools

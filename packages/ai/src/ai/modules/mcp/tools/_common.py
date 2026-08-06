@@ -1,6 +1,7 @@
 # Copyright 2026 Aparavi Software AG. MIT License.
 """Shared helpers for MCP tool handlers."""
 
+import asyncio
 import json
 from typing import Any, Dict
 
@@ -45,3 +46,11 @@ def load_pipeline(args: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError('load_pipeline resolved a non-object pipeline value')
 
     return resolved
+
+
+async def load_pipeline_async(args: Dict[str, Any]) -> Dict[str, Any]:
+    """`load_pipeline` off the event loop: the ``filepath`` branch does a
+    blocking ``open()``/parse, which would stall every in-flight request on
+    the in-process ASGI server for the duration of the read.
+    """
+    return await asyncio.to_thread(load_pipeline, args)

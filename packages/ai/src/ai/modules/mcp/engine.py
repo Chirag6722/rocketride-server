@@ -12,6 +12,17 @@ import os
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 
+class LogNotFound(KeyError):
+    """A requested run-log chapter or trace is absent or evicted.
+
+    Raised by the log seam (``log_traces`` on an unknown ``chapter_begin_seq``,
+    ``log_trace`` on a ``begin_seq`` below the retention horizon) so the tool
+    layer can catch this exact condition without also swallowing incidental
+    ``KeyError``s from unrelated dict lookups. Subclasses ``KeyError`` to keep
+    the seam's original contract.
+    """
+
+
 @runtime_checkable
 class EngineClient(Protocol):
     @property
@@ -265,7 +276,7 @@ class WsEngineClient:
         then seeks to that chapter's ``endTime`` (or ``'live'`` if the
         chapter has no ``endTime`` — i.e. it is still open) before reading
         traces, so the result reflects that run's activity rather than the
-        latest one. No matching chapter raises ``KeyError(chapter_begin_seq)``
+        latest one. No matching chapter raises ``LogNotFound(chapter_begin_seq)``
         — callers (the ``log_traces`` MCP tool) map that to a structured
         not-found result the same way ``log_trace`` already maps an expired
         ``beginSeq``.
@@ -280,7 +291,7 @@ class WsEngineClient:
                 chapters = (chapters_result or {}).get('chapters') or []
                 chapter = next((c for c in chapters if c.get('beginSeq') == chapter_begin_seq), None)
                 if chapter is None:
-                    raise KeyError(chapter_begin_seq)
+                    raise LogNotFound(chapter_begin_seq)
                 end_time = chapter.get('endTime')
                 await session.seek('live' if end_time is None else end_time)
             return await session.get_traces(n)
@@ -300,7 +311,13 @@ class WsEngineClient:
         session = self._client.log.open_event_stream(project_id, source, run_kind)
         try:
             await session.seek('live')
-            return await session.get_trace(begin_seq)
+            try:
+                return await session.get_trace(begin_seq)
+            except KeyError as exc:
+                # The SDK raises a plain KeyError for a beginSeq below the
+                # retention horizon; narrow it so the tool layer's catch
+                # cannot swallow unrelated KeyErrors.
+                raise LogNotFound(begin_seq) from exc
         finally:
             session.close_event_stream()
 

@@ -58,10 +58,10 @@ async def test_list_components_slims_services(fake_engine):
         'category': ['source'],
         'summary': 'Optical character recognition component',
     }
-    # No config schema leaked into the slim menu.
+    # No config schema or other engine metadata leaked into the slim menu:
+    # the exact key set fails if a future change widens it.
     for comp in result['components']:
-        assert 'schema' not in comp
-        assert 'Pipe' not in comp
+        assert set(comp) == {'name', 'category', 'summary'}
 
 
 # --- describe_component ---------------------------------------------------
@@ -240,3 +240,19 @@ async def test_list_components_via_real_dispatch(fake_engine):
     payload = json.loads(result.content[0].text)
     assert payload['ok'] is True
     assert {c['name'] for c in payload['components']} == {'ocr', 'anthropic'}
+
+
+@pytest.mark.asyncio
+async def test_describe_pipeline_skips_lookup_when_provider_absent(fake_engine):
+    """A component with no `provider` skips the get_service lookup and still
+    emits its entry with provider None.
+    """
+    registry = ToolRegistry()
+    introspection.register(registry)
+    pipeline = {'source': 'my-pipe', 'components': [{'id': 'c1', 'input': []}]}
+
+    result = await registry.handler('describe_pipeline')(fake_engine, None, {'pipeline': pipeline})
+
+    assert result['ok'] is True
+    assert result['components'] == [{'id': 'c1', 'provider': None, 'title': None, 'classType': None, 'inputs': []}]
+    assert fake_engine.get_service_calls == []

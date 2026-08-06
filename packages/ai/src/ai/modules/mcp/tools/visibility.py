@@ -58,6 +58,13 @@ from ..tooling import ToolRegistry
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_INTERVAL_SECONDS = 1
 
+# Hard bounds on the caller-supplied poll parameters, enforced in the handler
+# (not just the schema — the server must not depend on client-side schema
+# validation): one `monitor` call must not busy-loop the engine (`interval: 0`)
+# or hold the tool call open indefinitely (unbounded `timeout`).
+MAX_TIMEOUT_SECONDS = 300
+MIN_INTERVAL_SECONDS = 0.25
+
 # Per-poll wall-clock budget for a single `get_task_status` call, so one hung
 # call can't itself exceed the overall poll `timeout`. Floors at the
 # caller's `interval` so a slow but valid poll cadence is never starved.
@@ -81,9 +88,15 @@ _MONITOR_SCHEMA = {
         'task_token': {'type': 'string', 'description': 'Task token returned by run_pipeline'},
         'timeout': {
             'type': 'number',
-            'description': 'Maximum seconds to poll before returning the current snapshot (default 30)',
+            'minimum': 0,
+            'maximum': MAX_TIMEOUT_SECONDS,
+            'description': f'Maximum seconds to poll before returning the current snapshot (default 30, max {MAX_TIMEOUT_SECONDS})',
         },
-        'interval': {'type': 'number', 'description': 'Seconds to wait between polls (default 1)'},
+        'interval': {
+            'type': 'number',
+            'minimum': MIN_INTERVAL_SECONDS,
+            'description': 'Seconds to wait between polls (default 1)',
+        },
     },
     'required': ['task_token'],
 }
@@ -120,8 +133,13 @@ async def _monitor(client, tasks, args: Dict[str, Any]) -> dict:
     if not token:
         return _bad('task_token is required', 'call run_pipeline first to obtain a task_token')
 
-    timeout = args.get('timeout', DEFAULT_TIMEOUT_SECONDS)
-    interval = args.get('interval', DEFAULT_INTERVAL_SECONDS)
+    try:
+        timeout = float(args.get('timeout', DEFAULT_TIMEOUT_SECONDS))
+        interval = float(args.get('interval', DEFAULT_INTERVAL_SECONDS))
+    except (TypeError, ValueError):
+        return _bad('timeout and interval must be numbers', 'omit them to use the defaults')
+    timeout = max(0.0, min(timeout, MAX_TIMEOUT_SECONDS))
+    interval = max(MIN_INTERVAL_SECONDS, interval)
     per_poll_timeout = max(interval, DEFAULT_PER_POLL_TIMEOUT_SECONDS)
 
     deadline = time.monotonic() + timeout
@@ -134,15 +152,19 @@ async def _monitor(client, tasks, args: Dict[str, Any]) -> dict:
         except asyncio.TimeoutError:
             # A single hung poll isn't a hard failure -- return the current
             # (last-known, necessarily non-terminal) snapshot rather than
-            # blow through the caller's overall `timeout`.
-            return _snapshot(token, status, polls)
+            # blow through the caller's overall `timeout`. Marked so the
+            # caller can tell "the poll timed out" from "state is none".
+            snapshot = _snapshot(token, status, polls)
+            snapshot['poll_timed_out'] = True
+            return snapshot
         except Exception as exc:  # noqa: BLE001 - normalized below, HardError re-raises
             return normalize_error(exc)
         polls += 1
 
         state = status.get('state', 0)
         if _is_terminal(status, state):
-            tasks.remove(token)
+            if tasks is not None:
+                tasks.remove(token)
             return _snapshot(token, status, polls)
 
         if time.monotonic() >= deadline:
