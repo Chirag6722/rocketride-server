@@ -29,6 +29,7 @@ normalizer's hard-failure set.
 import asyncio
 from typing import Any, Dict
 
+from ..apps import DROPPER_URI
 from ..errors import _bad
 from ..tooling import ToolRegistry
 
@@ -322,6 +323,7 @@ def register(registry: ToolRegistry) -> None:
         'programmatic multipart POST, and dropper_url for a human to drag-drop files in a browser. '
         'Same inputs as run_pipeline, minus the inline-send path.',
         _RUN_DROPPER_PIPE_SCHEMA,
+        ui_resource_uri=DROPPER_URI,
     )(_run_dropper_pipe)
 
     registry.register(

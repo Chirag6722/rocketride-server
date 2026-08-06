@@ -18,3 +18,7 @@ _As of 2026-07-29._
    legacy SSE server mode is now formally Deprecated upstream.
 7. **Tasks-extension adoption** — worth doing in the migration PR or as a follow-up? (Audit recommends
    follow-up.)
+8. ~~**crewai constraint conflict**~~ — RESOLVED 2026-07-30: `depends.py` now supports uv
+   `--override` files (`OVERRIDES_GLOBS`); `packages/ai/src/ai/overrides.txt` forces
+   `mcp>=2.0.0,<3` past crewai's `<1.29` cap. Safe: agent_crewai never touches crewai's
+   MCP features (lazy import, verified). Remove when crewai ships mcp-2 support.

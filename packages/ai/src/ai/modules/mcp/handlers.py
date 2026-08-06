@@ -9,6 +9,8 @@ prompt surface -- "knowledge lives in Skills," not MCP prompts.
 
 import json
 import logging
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 import mcp.types as types
@@ -21,15 +23,28 @@ from .cache_policy import (
     RESOURCES_LIST_TTL_MS,
     STATUS_READ_TTL_MS,
     TOOLS_TTL_MS,
+    UI_READ_TTL_MS,
 )
 from .engine import EngineClient
 from .errors import HardError, normalize_error
 from .registry import TaskRegistry
 from .tooling import ToolRegistry
+from . import apps as apps_mod
 from . import resources as resources_mod
 from . import tools as tools_pkg
 
 logger = logging.getLogger(__name__)
+
+# `ai` is not published as an installable distribution -- it ships as source
+# copied into `dist/server/ai` by the builder, never `pip install`-ed under
+# any name (see packages/ai/scripts/tasks.js). `importlib.metadata.version`
+# therefore always raises here today; the lookup is kept (rather than a bare
+# constant) so this starts reporting a real version for free if `ai` -- or a
+# renamed successor -- is ever packaged as a proper distribution.
+try:
+    _SERVER_VERSION = _pkg_version('ai')
+except PackageNotFoundError:
+    _SERVER_VERSION = '0.0.0'
 
 
 def make_flow_dispatcher(tasks: TaskRegistry) -> Callable[[Dict[str, Any]], Awaitable[None]]:
@@ -69,6 +84,7 @@ def build_mcp_server(
     task_registry: Optional[TaskRegistry] = None,
     *,
     registry: Optional[ToolRegistry] = None,
+    apps_dir: Optional[Path] = None,
 ) -> Server:
     """Build and return a low-level MCP Server wired with tools and resources.
 
@@ -88,6 +104,10 @@ def build_mcp_server(
         registry: Optional pre-built `ToolRegistry`. Keyword-only test seam --
             production callers never pass this; when omitted (the normal case),
             a fresh registry is built here via `tools.register_all`.
+        apps_dir: Optional override for the directory MCP Apps widget HTML is
+            read from. Keyword-only test seam like `registry`; production
+            callers never pass this, and `apps.py` falls back to the built
+            `apps/dist` directory when omitted.
 
     Returns:
         A configured mcp.server.lowlevel.Server ready to run.
@@ -136,17 +156,36 @@ def build_mcp_server(
                     # instead of letting v2's catch-all reduce it to "Internal
                     # server error".
                     raise MCPError(types.INTERNAL_ERROR, hard_exc.message) from hard_exc
-        return types.CallToolResult(content=[types.TextContent(type='text', text=json.dumps(result, default=str))])
+        # structured_content bypasses json.dumps(default=str): handlers MUST
+        # return JSON-primitive dicts (all 22 do today -- values come from
+        # JSON-over-WS engine responses). A datetime/bytes value would pass the
+        # text path but crash SDK response serialization.
+        return types.CallToolResult(
+            content=[types.TextContent(type='text', text=json.dumps(result, default=str))],
+            structured_content=result,
+        )
 
     async def _on_list_resources(ctx, params: types.PaginatedRequestParams | None) -> types.ListResourcesResult:
+        try:
+            engine_origin = engine_factory().base_url
+        except Exception as exc:  # noqa: BLE001 - origin is an enhancement, never a failure
+            logger.debug('No engine origin for widget CSP stamping: %s', exc)
+            engine_origin = None
         return types.ListResourcesResult(
-            resources=resources_mod.list_resources(),
+            resources=resources_mod.list_resources() + apps_mod.list_ui_resources(apps_dir, engine_origin),
             ttl_ms=RESOURCES_LIST_TTL_MS,
             cache_scope=CACHE_SCOPE,
         )
 
     async def _on_read_resource(ctx, params: types.ReadResourceRequestParams) -> types.ReadResourceResult:
         uri_str = str(params.uri)
+        ui_html = apps_mod.read_ui_resource(uri_str, apps_dir)
+        if ui_html is not None:
+            return types.ReadResourceResult(
+                contents=[types.TextResourceContents(uri=params.uri, mimeType=apps_mod.UI_MIME_TYPE, text=ui_html)],
+                ttl_ms=UI_READ_TTL_MS,
+                cache_scope=CACHE_SCOPE,
+            )
         text = await resources_mod.read_resource(engine_factory(), uri_str)
         # Per-URI cache TTL: status is live state (no caching), pipelines reflect running
         # tasks (30s), unknown URIs default to uncached (0) for safety.
@@ -164,10 +203,14 @@ def build_mcp_server(
 
     server = Server(
         'rocketride-mcp',
+        version=_SERVER_VERSION,
         on_list_tools=_on_list_tools,
         on_call_tool=_on_call_tool,
         on_list_resources=_on_list_resources,
         on_read_resource=_on_read_resource,
     )
+
+    if apps_mod.available_apps(apps_dir):
+        server.extensions[apps_mod.UI_EXTENSION_ID] = apps_mod.extension_capability()
 
     return server

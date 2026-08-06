@@ -41,6 +41,7 @@ packages:
   - 'apps/dropper-ui'
   - 'apps/events-ui'
   - 'apps/hello-ui'
+  - 'apps/mcp-widgets'
   - 'apps/monitor-ui'
   - 'apps/profiler-ui'
   - 'apps/shell-ui'

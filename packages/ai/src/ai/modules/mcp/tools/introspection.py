@@ -85,7 +85,11 @@ async def _describe_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
             }
         )
 
-    return {'ok': True, 'source': pipeline.get('source'), 'components': components}
+    return {
+        'ok': True,
+        'source': pipeline.get('source'),
+        'components': components,
+    }
 
 
 def register(registry: ToolRegistry) -> None:

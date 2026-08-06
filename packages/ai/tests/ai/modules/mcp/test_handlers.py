@@ -181,10 +181,13 @@ async def test_list_tools_reflects_real_register_all(fake_engine):
 
 
 @pytest.mark.asyncio
-async def test_list_resources_returns_exactly_status_and_pipelines(fake_engine):
+async def test_list_resources_returns_exactly_status_and_pipelines(fake_engine, tmp_path):
     import ai.modules.mcp.handlers as handlers_mod
 
-    server = handlers_mod.build_mcp_server(lambda: fake_engine)
+    # Isolate from whatever MCP Apps widget bundles happen to be built on
+    # disk (apps/dist) -- this test is about the two JSON resources, not the
+    # ui:// widget surface (covered separately in test_apps.py).
+    server = handlers_mod.build_mcp_server(lambda: fake_engine, apps_dir=tmp_path)
     async with Client(server) as client:
         result = await client.list_resources()
 

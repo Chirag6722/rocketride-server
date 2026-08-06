@@ -249,6 +249,33 @@ a structured result.
 `rocketride://nodes` was removed — superseded by the `list_components` tool plus the
 static Skills map.
 
+## Embedded UI (MCP Apps)
+
+The server implements the `io.modelcontextprotocol/ui` extension (spec
+2026-01-26). Widgets are single-file HTML bundles built by
+`builder mcp-widgets:build` from `apps/mcp-widgets/` into `apps/dist/` next to
+this module, served as `ui://rocketride/<name>.html` resources with mimeType
+`text/html;profile=mcp-app`. A tool opts in via
+`ToolRegistry.register(..., ui_resource_uri=...)`, which emits
+`_meta.ui.resourceUri`; hosts that support MCP Apps render the widget beside
+that tool's result, all other hosts see the unchanged JSON. The capability is
+advertised only when at least one built bundle exists on disk.
+
+Current widgets: `pipelines-table` (linked to `list_running_pipelines`;
+refresh/terminate call back through the bridge) and `dropper` (linked to
+`run_dropper_pipe`; in-chat file upload with progress, then renders the
+pipeline's results). The introspection tools (`describe_pipeline`,
+`validate_pipeline`) carry no widget link — their results are plain JSON.
+(Two earlier widgets were removed after live testing: the run-monitor view
+and the pipeline-view widget in both its incarnations, the SVG graph and the
+real-canvas iframe embed — see git history if either is ever revisited.)
+Widgets that make direct network calls (`dropper` uploads straight to the
+engine) declare `csp.connectDomains`; the server stamps that list with the
+live engine origin when resources are listed, so the host can authorize the
+request. Widgets that only call tools through the bridge declare no
+`csp.connectDomains`. Tool results also carry `structuredContent` alongside
+the text payload, giving widgets typed JSON to render without re-parsing.
+
 ## Prompts: removed
 
 There is no prompt surface. "Knowledge lives in Skills," not MCP prompts — the 3

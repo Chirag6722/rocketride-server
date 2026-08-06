@@ -50,6 +50,7 @@ import asyncio
 import time
 from typing import Any, Dict
 
+from ..apps import PIPELINES_TABLE_URI
 from ..errors import _bad
 from ..errors import normalize_error
 from ..tooling import ToolRegistry
@@ -222,6 +223,7 @@ def register(registry: ToolRegistry) -> None:
         'List running pipelines on the connected server with their task tokens, names, and state. '
         'Use the tokens with monitor, send_data, or terminate.',
         {'type': 'object', 'properties': {}},
+        ui_resource_uri=PIPELINES_TABLE_URI,
     )(_list_running_pipelines)
     registry.register(
         'get_pipeline_trace',
