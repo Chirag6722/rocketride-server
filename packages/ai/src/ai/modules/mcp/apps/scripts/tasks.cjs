@@ -7,16 +7,18 @@
 /**
  * MCP Widgets Build Module
  *
- * Single-file HTML widgets (MCP Apps) served by the ai MCP module.
+ * Single-file HTML widgets (MCP Apps) served by the ai MCP module. The
+ * workspace lives inside the module (packages/ai/src/ai/modules/mcp/apps),
+ * so vite builds straight into the served dist/ — no copy step. ai:sync
+ * excludes everything here except dist/, keeping the toolchain out of the
+ * server dist.
  */
 const path = require('path');
-const { execCommand, syncDir, formatSyncStats, removeDir, hasBuildInputChanged, saveSourceHash, setState, exists, move } = require('../../../scripts/lib');
-const { PROJECT_ROOT } = require('../../../scripts/lib/paths');
+const { execCommand, removeDir, hasBuildInputChanged, saveSourceHash, setState, exists, move } = require('../../../../../../../../scripts/lib');
 
 // Paths
 const APP_ROOT = path.join(__dirname, '..');
 const DIST_DIR = path.join(APP_ROOT, 'dist');
-const AI_APPS_DIST = path.join(PROJECT_ROOT, 'packages', 'ai', 'src', 'ai', 'modules', 'mcp', 'apps', 'dist');
 
 // Build inputs: own src + package.json
 const SRC_DIR = path.join(APP_ROOT, 'src');
@@ -30,7 +32,8 @@ const WIDGETS = ['pipelines-table', 'dropper'];
 // =============================================================================
 
 /**
- * Bundles each widget via vite with build-input caching.
+ * Bundles each widget via vite with build-input caching. Vite's outDir is the
+ * served dist/ next to this workspace, which is where apps.py reads from.
  */
 function makeBundleAction() {
 	return {
@@ -63,23 +66,10 @@ function makeBundleAction() {
 	};
 }
 
-/**
- * Copies the built widgets into the ai module's served apps directory.
- */
-function makeCopyAction() {
-	return {
-		run: async (ctx, task) => {
-			const stats = await syncDir(DIST_DIR, AI_APPS_DIST, { mirror: true });
-			task.output = formatSyncStats(stats);
-		},
-	};
-}
-
 function makeCleanAction() {
 	return {
 		run: async (ctx, task) => {
 			await removeDir(DIST_DIR);
-			await removeDir(AI_APPS_DIST);
 			await setState(BUILD_HASH_KEY, null);
 			task.output = 'Cleaned mcp-widgets';
 		},
@@ -95,15 +85,11 @@ module.exports = {
 	description: 'MCP Apps Widgets (embedded UI served by the ai MCP module)',
 
 	actions: [
-		// Internal actions (no description — not shown in builder --help)
-		{ name: 'mcp-widgets:bundle', action: makeBundleAction },
-		{ name: 'mcp-widgets:copy', action: makeCopyAction },
-
 		{
 			name: 'mcp-widgets:build',
 			action: () => ({
 				description: 'Build MCP Apps widgets',
-				steps: ['mcp-widgets:bundle', 'mcp-widgets:copy'],
+				...makeBundleAction(),
 			}),
 		},
 		{

@@ -1,9 +1,10 @@
 # Copyright 2026 Aparavi Software AG. MIT License.
 """MCP Apps (io.modelcontextprotocol/ui): embedded widget resources.
 
-Widgets are single-file HTML bundles built from apps/mcp-widgets by
-``builder mcp-widgets:build`` into ``apps/dist/`` next to this module (the
-ai:build syncDir carries them into the server dist). Each widget is served as
+Widgets are single-file HTML bundles built by ``builder mcp-widgets:build``
+from the vite workspace embedded at ``apps/`` next to this module, straight
+into ``apps/dist/`` (the ai:build syncDir carries only that dist into the
+server dist — the workspace's sources and node_modules are excluded). Each widget is served as
 a ``ui://`` resource with the profile mimeType; tools opt in by registering
 with ``ui_resource_uri`` (see tooling.py). Hosts without the UI extension see
 the plain JSON tool results, unchanged.

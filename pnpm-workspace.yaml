@@ -34,6 +34,9 @@ packages:
   # Documentation site
   - 'packages/docs'
 
+  # MCP Apps widgets (vite workspace embedded in the ai MCP module)
+  - 'packages/ai/src/ai/modules/mcp/apps'
+
   # Applications
   - 'apps/aparavi-ui'
   - 'apps/chat-ui'
@@ -41,7 +44,6 @@ packages:
   - 'apps/dropper-ui'
   - 'apps/events-ui'
   - 'apps/hello-ui'
-  - 'apps/mcp-widgets'
   - 'apps/monitor-ui'
   - 'apps/profiler-ui'
   - 'apps/shell-ui'

@@ -245,8 +245,9 @@ static Skills map.
 
 The server implements the `io.modelcontextprotocol/ui` extension (spec
 2026-01-26). Widgets are single-file HTML bundles built by
-`builder mcp-widgets:build` from `apps/mcp-widgets/` into `apps/dist/` next to
-this module, served as `ui://rocketride/<name>.html` resources with mimeType
+`builder mcp-widgets:build` from the vite workspace embedded at `apps/` next
+to this module, straight into `apps/dist/`, and served as
+`ui://rocketride/<name>.html` resources with mimeType
 `text/html;profile=mcp-app`. A tool opts in via
 `ToolRegistry.register(..., ui_resource_uri=...)`, which emits
 `_meta.ui.resourceUri`; hosts that support MCP Apps render the widget beside
