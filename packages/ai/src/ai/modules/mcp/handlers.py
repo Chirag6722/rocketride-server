@@ -110,10 +110,14 @@ def build_mcp_server(
                 # lost, auth failed). MCPError carries it to the wire verbatim.
                 raise MCPError(types.INTERNAL_ERROR, exc.message) from exc
             except Exception as exc:  # noqa: BLE001 - normalized below
-                logger.exception('Unhandled exception in MCP tool %r', name)
                 try:
                     result = normalize_error(exc)
+                    # Normalized failures are expected agent behavior (missing
+                    # args, validation rejections) — warn without a traceback
+                    # so real hard failures stand out in the error log.
+                    logger.warning('MCP tool %r returned a normalized error: %s', name, type(exc).__name__)
                 except HardError as hard_exc:
+                    logger.exception('Hard failure in MCP tool %r', name)
                     # normalize_error itself reclassifies some exceptions (by type
                     # name) into HardError -- that raise happens from *inside* this
                     # except block, so it is not seen by the `except HardError`
@@ -157,9 +161,9 @@ def build_mcp_server(
         text = await resources_mod.read_resource(engine_factory(), uri_str)
         # Per-URI cache TTL: status is live state (no caching), pipelines reflect running
         # tasks (30s), unknown URIs default to uncached (0) for safety.
-        if uri_str == 'rocketride://status':
+        if uri_str == resources_mod.STATUS_URI:
             ttl_ms = STATUS_READ_TTL_MS
-        elif uri_str == 'rocketride://pipelines':
+        elif uri_str == resources_mod.PIPELINES_URI:
             ttl_ms = PIPELINES_READ_TTL_MS
         else:
             ttl_ms = 0

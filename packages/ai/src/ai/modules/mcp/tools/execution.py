@@ -110,11 +110,17 @@ _SEND_FILES_SCHEMA = {
 }
 
 
-async def _run_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
+async def _start_task(client, args: Dict[str, Any], tool_name: str):
+    """Shared start path for `run_pipeline` / `run_dropper_pipe`: input check,
+    use() kwargs (incl. the `pipelineTraceLevel: 'summary'` default), and the
+    wait_for-wrapped engine call. Returns ``(started, None)`` on success or
+    ``(None, error_envelope)`` — keeping the default trace level and the
+    timeout contract in one place so a change can't land in one copy only.
+    """
     pipeline = args.get('pipeline')
     filepath = args.get('filepath')
     if not pipeline and not filepath:
-        return _bad('pipeline or filepath is required', 'pass an inline pipeline object or a filepath')
+        return None, _bad('pipeline or filepath is required', 'pass an inline pipeline object or a filepath')
 
     kwargs: Dict[str, Any] = {'filepath': filepath} if filepath else {'pipeline': pipeline}
     for key in _OPTIONAL_USE_KWARGS:
@@ -126,22 +132,29 @@ async def _run_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
     try:
         started = await asyncio.wait_for(client.use(**kwargs), timeout=DEFAULT_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        return _timeout(
-            'run_pipeline timed out waiting for the engine to start the task',
+        return None, _timeout(
+            f'{tool_name} timed out waiting for the engine to start the task',
             'the task may still be starting; call monitor once a task_token is known, or retry',
         )
+    return started or {}, None
 
-    token = (started or {}).get('token')
+
+async def _run_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
+    started, err = await _start_task(client, args, 'run_pipeline')
+    if err:
+        return err
+
+    token = started.get('token')
     if not token:
         return _bad(
             'engine did not return a task token',
             'the pipeline may have failed to start, or the engine response was malformed',
         )
-    tasks.add(token, pipeline_ref=filepath or '<inline>')
+    tasks.add(token, pipeline_ref=args.get('filepath') or '<inline>')
 
     result_payload: Dict[str, Any] = {'ok': True, 'task_token': token}
-    result_payload['projectId'] = (started or {}).get('projectId')
-    result_payload['source'] = (started or {}).get('source')
+    result_payload['projectId'] = started.get('projectId')
+    result_payload['source'] = started.get('source')
 
     inputs = args.get('inputs')
     if inputs is not None:
@@ -173,33 +186,16 @@ async def _run_dropper_pipe(client, tasks, args: Dict[str, Any]) -> dict:
     (``pk_``, credential) so it needs no ``Authorization`` header. Unlike
     ``run_pipeline`` there is no inline-send path.
     """
-    pipeline = args.get('pipeline')
-    filepath = args.get('filepath')
-    if not pipeline and not filepath:
-        return _bad('pipeline or filepath is required', 'pass an inline pipeline object or a filepath')
+    started, err = await _start_task(client, args, 'run_dropper_pipe')
+    if err:
+        return err
 
-    kwargs: Dict[str, Any] = {'filepath': filepath} if filepath else {'pipeline': pipeline}
-    for key in _OPTIONAL_USE_KWARGS:
-        if args.get(key) is not None:
-            kwargs[key] = args[key]
-
-    kwargs.setdefault('pipelineTraceLevel', 'summary')
-
-    try:
-        started = await asyncio.wait_for(client.use(**kwargs), timeout=DEFAULT_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        return _timeout(
-            'run_dropper_pipe timed out waiting for the engine to start the task',
-            'the task may still be starting; call monitor once a task_token is known, or retry',
-        )
-
-    started = started or {}
     token = started.get('token')
     public_token = started.get('publicToken')
     if not token:
         return _bad(
-            'engine did not return a task token and public auth for the dropper URL',
-            'the pipeline may lack a data-ingress source, or the engine response was malformed',
+            'engine did not return a task token for the dropper URL',
+            'the pipeline may have failed to start, or the engine response was malformed',
         )
     if not public_token:
         # The task is already running engine-side and the caller gets no
@@ -210,10 +206,10 @@ async def _run_dropper_pipe(client, tasks, args: Dict[str, Any]) -> dict:
         except Exception:  # noqa: BLE001 - best-effort cleanup on an already-failed call
             pass
         return _bad(
-            'engine did not return a task token and public auth for the dropper URL',
+            'engine did not return public auth for the dropper URL',
             'the pipeline may lack a data-ingress source, or the engine response was malformed',
         )
-    tasks.add(token, pipeline_ref=filepath or '<inline>')
+    tasks.add(token, pipeline_ref=args.get('filepath') or '<inline>')
 
     base_url = str(client.base_url).rstrip('/')
     result_payload: Dict[str, Any] = {

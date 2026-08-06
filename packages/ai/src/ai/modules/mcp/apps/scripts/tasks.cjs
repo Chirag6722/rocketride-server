@@ -44,7 +44,13 @@ function makeBundleAction() {
 		run: async (ctx, task) => {
 			// Fingerprint inputs before building so concurrent edits are detected on the next run.
 			const { changed, hash } = await hasBuildInputChanged(BUILD_HASH_KEY, [SRC_DIR], [PKG_JSON, VITE_CONFIG, TS_CONFIG]);
-			if (!ctx.options.force && !changed && (await exists(DIST_DIR))) {
+			// Check every expected bundle, not just the dist dir: a deleted or
+			// never-emitted widget HTML would otherwise ride a matching hash and
+			// silently vanish from the served UI surface.
+			const outputsPresent = (
+				await Promise.all(WIDGETS.map((widget) => exists(path.join(DIST_DIR, `${widget}.html`))))
+			).every(Boolean);
+			if (!ctx.options.force && !changed && outputsPresent) {
 				task.output = 'No changes detected';
 				return;
 			}

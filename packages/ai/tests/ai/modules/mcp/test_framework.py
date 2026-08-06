@@ -83,6 +83,16 @@ def test_extract_dap_failure_returns_none_when_dap_result_success_true():
     assert _extract_dap_failure(exc) is None
 
 
+def test_normalize_error_raises_harderror_for_builtin_connection_subclass():
+    """The isinstance branch: builtin subclasses (ConnectionResetError, ...)
+    whose type NAME is not in HARD_EXC_NAMES must still classify as hard.
+    """
+    with pytest.raises(HardError) as excinfo:
+        normalize_error(ConnectionResetError('peer reset'))
+
+    assert excinfo.value.error_type == 'ConnectionResetError'
+
+
 def test_normalize_error_uses_dap_failure_message_when_present():
     exc = RuntimeError('generic')
     exc.dap_result = {'success': False, 'message': 'engine says no'}

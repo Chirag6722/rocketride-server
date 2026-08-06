@@ -68,6 +68,10 @@ async def _describe_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
     service_cache: Dict[str, Any] = {}
     components = []
     for comp in pipeline.get('components', []) or []:
+        # Client-supplied pipeline: a non-mapping entry must not abort the
+        # whole parse (same guard as _list_components).
+        if not isinstance(comp, dict):
+            continue
         provider = comp.get('provider')
         service = None
         if provider is not None:

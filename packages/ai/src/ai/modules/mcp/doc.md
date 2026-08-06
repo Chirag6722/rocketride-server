@@ -20,7 +20,7 @@ tool; both are removed (see "History" below).
 ## Protocol
 
 The mounted `StreamableHTTPSessionManager` serves **both** MCP protocol revisions on
-the same `/mcp` endpoint, unconditionally — the SDK (`mcp==2.0.0`) inspects the
+the same `/mcp` endpoint, unconditionally — the SDK (`mcp>=2,<3`) inspects the
 `MCP-Protocol-Version` request header per request and routes accordingly, with no
 opt-in flag on our side:
 

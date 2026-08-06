@@ -25,8 +25,9 @@ export default defineConfig({
 		// downlevel path while staying inside the convention.
 		target: 'es2022',
 		rollupOptions: {
+			// viteSingleFile inlines all JS into the HTML, so no JS chunk is
+			// emitted — an entryFileNames option here would have no effect.
 			input: resolve(__dirname, 'src', widget, 'index.html'),
-			output: { entryFileNames: `${widget}.js` },
 		},
 	},
 });

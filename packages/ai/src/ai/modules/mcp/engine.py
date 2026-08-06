@@ -125,6 +125,30 @@ class WsEngineClient:
                 await self._client.connect()
                 self._connected = True
 
+    def _note_transport_error(self, exc: BaseException) -> None:
+        """Clear the cached connected flag when ``exc`` signals a lost transport.
+
+        Without this, the process-wide singleton latches ``_connected`` and
+        every later call fails with the SDK's ``RuntimeError('Server is not
+        connected')`` until the process restarts. The RuntimeError match is
+        narrowed to that message: clearing the flag on an unrelated
+        RuntimeError would make the next call re-``connect()`` an already-live
+        SDK client.
+        """
+        if isinstance(exc, ConnectionError) or (isinstance(exc, RuntimeError) and 'not connected' in str(exc).lower()):
+            self._connected = False
+
+    async def _guarded(self, call: Any) -> Any:
+        """Connect lazily, await ``call()``, and un-latch on transport loss
+        so the next tool call reconnects instead of failing forever.
+        """
+        await self._ensure_connected()
+        try:
+            return await call()
+        except (ConnectionError, RuntimeError) as exc:
+            self._note_transport_error(exc)
+            raise
+
     async def close(self) -> None:
         """Tear down the connection. Safe to call even if never connected.
 
@@ -140,9 +164,11 @@ class WsEngineClient:
                     self._connected = False
 
     async def _request(self, command: str) -> dict:
-        await self._ensure_connected()
-        req = self._client.build_request(command=command)
-        resp = await self._client.request(req)
+        async def _do() -> Any:
+            req = self._client.build_request(command=command)
+            return await self._client.request(req)
+
+        resp = await self._guarded(_do)
         return (resp or {}).get('body') or {}
 
     async def list_tasks(self) -> List[dict]:
@@ -159,86 +185,70 @@ class WsEngineClient:
         mimetype: Optional[str] = None,
         on_sse: Optional[Any] = None,
     ) -> Any:
-        await self._ensure_connected()
-        return await self._client.send(token, data, objinfo=objinfo, mimetype=mimetype, on_sse=on_sse)
+        return await self._guarded(
+            lambda: self._client.send(token, data, objinfo=objinfo, mimetype=mimetype, on_sse=on_sse)
+        )
 
     async def get_services(self) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.get_services()
+        return await self._guarded(lambda: self._client.get_services())
 
     async def get_service(self, name: str) -> Optional[Dict[str, Any]]:
-        await self._ensure_connected()
-        return await self._client.get_service(name)
+        return await self._guarded(lambda: self._client.get_service(name))
 
     async def validate(self, pipeline: dict, source: Optional[str] = None) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.validate(pipeline, source=source)
+        return await self._guarded(lambda: self._client.validate(pipeline, source=source))
 
     async def use(self, **kwargs: Any) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.use(**kwargs)
+        return await self._guarded(lambda: self._client.use(**kwargs))
 
     async def terminate(self, token: str) -> None:
-        await self._ensure_connected()
-        await self._client.terminate(token)
+        await self._guarded(lambda: self._client.terminate(token))
 
     async def send_files(self, files: List[Any], token: str) -> Any:
-        await self._ensure_connected()
-        return await self._client.send_files(files, token)
+        return await self._guarded(lambda: self._client.send_files(files, token))
 
     async def fs_read_string(self, path: str) -> str:
-        await self._ensure_connected()
-        return await self._client.fs_read_string(path)
+        return await self._guarded(lambda: self._client.fs_read_string(path))
 
     async def fs_list_dir(self, path: str = '') -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.fs_list_dir(path)
+        return await self._guarded(lambda: self._client.fs_list_dir(path))
 
     async def save_template(self, template_id: str, pipeline: dict) -> None:
-        await self._ensure_connected()
-        await self._client.save_template(template_id, pipeline)
+        await self._guarded(lambda: self._client.save_template(template_id, pipeline))
 
     async def get_template(self, template_id: str) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.get_template(template_id)
+        return await self._guarded(lambda: self._client.get_template(template_id))
 
     async def deploy_add(self, pipeline: dict, schedule: Optional[str] = None) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.deploy.add(pipeline, schedule=schedule)
+        return await self._guarded(lambda: self._client.deploy.add(pipeline, schedule=schedule))
 
     async def deploy_list(self) -> List[Dict[str, Any]]:
-        await self._ensure_connected()
-        return await self._client.deploy.list()
+        return await self._guarded(lambda: self._client.deploy.list())
 
     async def get_task_status(self, token: str) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.get_task_status(token)
+        return await self._guarded(lambda: self._client.get_task_status(token))
 
     async def fs_stat(self, path: str) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.fs_stat(path)
+        return await self._guarded(lambda: self._client.fs_stat(path))
 
     async def fs_get_url(self, path: str, expires_in: int = 3600, download_name: Optional[str] = None) -> str:
-        await self._ensure_connected()
-        return await self._client.fs_get_url(path, expires_in=expires_in, download_name=download_name)
+        return await self._guarded(
+            lambda: self._client.fs_get_url(path, expires_in=expires_in, download_name=download_name)
+        )
 
     async def deploy_status(self, project_id: str) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.deploy.status(project_id)
+        return await self._guarded(lambda: self._client.deploy.status(project_id))
 
     async def deploy_remove(self, project_id: str) -> None:
-        await self._ensure_connected()
-        await self._client.deploy.remove(project_id)
+        await self._guarded(lambda: self._client.deploy.remove(project_id))
 
     async def deploy_update(
         self, project_id: str, pipeline: Optional[dict] = None, schedule: Optional[str] = None
     ) -> None:
-        await self._ensure_connected()
-        await self._client.deploy.update(project_id, pipeline=pipeline, schedule=schedule)
+        await self._guarded(lambda: self._client.deploy.update(project_id, pipeline=pipeline, schedule=schedule))
 
     async def log_chapters(self, project_id: str, source: str, run_kind: str = 'dev') -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.log.chapters(project_id, source, run_kind)
+        return await self._guarded(lambda: self._client.log.chapters(project_id, source, run_kind))
 
     async def log_read(
         self,
@@ -251,15 +261,16 @@ class WsEngineClient:
         max_events: Optional[int] = None,
         types: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        await self._ensure_connected()
-        return await self._client.log.read(
-            project_id,
-            source,
-            run_kind,
-            from_seq=from_seq,
-            cursor=cursor,
-            max_events=max_events,
-            types=types,
+        return await self._guarded(
+            lambda: self._client.log.read(
+                project_id,
+                source,
+                run_kind,
+                from_seq=from_seq,
+                cursor=cursor,
+                max_events=max_events,
+                types=types,
+            )
         )
 
     async def log_traces(
@@ -303,6 +314,9 @@ class WsEngineClient:
                 end_time = chapter.get('endTime')
                 await session.seek('live' if end_time is None else end_time)
             return await session.get_traces(n)
+        except (ConnectionError, RuntimeError) as exc:
+            self._note_transport_error(exc)
+            raise
         finally:
             session.close_event_stream()
 
@@ -326,6 +340,9 @@ class WsEngineClient:
                 # retention horizon; narrow it so the tool layer's catch
                 # cannot swallow unrelated KeyErrors.
                 raise LogNotFound(begin_seq) from exc
+        except (ConnectionError, RuntimeError) as exc:
+            self._note_transport_error(exc)
+            raise
         finally:
             session.close_event_stream()
 

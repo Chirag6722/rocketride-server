@@ -42,6 +42,10 @@ class ToolRegistry:
         """
 
         def _decorator(fn: Callable) -> Callable:
+            if name in self._entries:
+                # A silent overwrite makes the first tool vanish from list_tools
+                # with nothing pointing at the cause; fail at import time.
+                raise ValueError(f'Duplicate tool registration: {name}')
             self._entries[name] = _ToolEntry(
                 description=description,
                 schema=schema,

@@ -25,7 +25,7 @@ title: "MCP Server"
 > standalone `rocketride-mcp` package (stdio transport). The engine also serves
 > a static 26-tool Streamable-HTTP MCP surface directly at `/mcp` on the engine
 > HTTP port — no separate process required. That surface is documented in the
-> engine module docs (`packages/ai/src/ai/modules/mcp/doc.md`).
+> [engine module docs](https://github.com/rocketride-org/rocketride-server/blob/develop/packages/ai/src/ai/modules/mcp/doc.md).
 
 ## Quick Start
 
@@ -329,8 +329,8 @@ result = await session.get_prompt(
 > The maintained HTTP surface for RocketRide is the Streamable-HTTP server in
 > `ai/modules/mcp`, served in-process at `/mcp` on the engine's own HTTP port — it
 > supersedes `rocketride-mcp-sse` and requires no separate process. New integrations
-> should target that endpoint instead of SSE mode; see
-> `packages/ai/src/ai/modules/mcp/doc.md` for its protocol and tool surface.
+> should target that endpoint instead of SSE mode; see the
+> [engine MCP documentation](https://github.com/rocketride-org/rocketride-server/blob/develop/packages/ai/src/ai/modules/mcp/doc.md) for its protocol and tool surface.
 
 For remote or Docker deployments, the server can run as an HTTP/SSE server instead of stdio:
 

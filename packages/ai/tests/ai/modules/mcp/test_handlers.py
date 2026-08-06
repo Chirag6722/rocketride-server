@@ -219,3 +219,53 @@ async def test_build_mcp_server_uses_passed_in_task_registry(monkeypatch, fake_e
 
     payload = json.loads(result.content[0].text)
     assert payload == {'sees_preexisting': True}
+
+
+@pytest.mark.asyncio
+async def test_call_tool_soft_error_returns_normalized_result(fake_engine):
+    """A plain RuntimeError from a handler is normalized to an in-band
+    {ok: False, error_type: 'RuntimeError'} result, not an MCP tool error.
+    """
+    import ai.modules.mcp.handlers as handlers_mod
+    from ai.modules.mcp.tooling import ToolRegistry
+
+    registry = ToolRegistry()
+
+    @registry.register('soft', 'raises a plain RuntimeError', _dummy_schema())
+    async def _soft(engine, task_registry, arguments):
+        raise RuntimeError('bad field')
+
+    server = handlers_mod.build_mcp_server(lambda: fake_engine, registry=registry)
+    async with Client(server) as client:
+        result = await client.call_tool('soft', {})
+
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert payload['ok'] is False
+    assert payload['error_type'] == 'RuntimeError'
+    assert payload['message'] == 'bad field'
+
+
+@pytest.mark.asyncio
+async def test_call_tool_normalizer_raised_harderror_still_maps_to_mcp_error(fake_engine):
+    """normalize_error itself re-raises HardError from INSIDE the except
+    suite — the sibling `except HardError` clause never sees it, so the inner
+    mapping in handlers.py is load-bearing. A custom class NAMED
+    ConnectionError (not a builtin subclass) exercises exactly that path.
+    """
+    import ai.modules.mcp.handlers as handlers_mod
+    from ai.modules.mcp.tooling import ToolRegistry
+
+    registry = ToolRegistry()
+
+    class ConnectionError(Exception):  # noqa: A001 - the name IS the test
+        pass
+
+    @registry.register('drops', 'raises a name-matched hard failure', _dummy_schema())
+    async def _drops(engine, task_registry, arguments):
+        raise ConnectionError('engine went away')
+
+    server = handlers_mod.build_mcp_server(lambda: fake_engine, registry=registry)
+    async with Client(server) as client:
+        with pytest.raises(MCPError, match='engine went away'):
+            await client.call_tool('drops', {})

@@ -136,3 +136,11 @@ async def test_run_dropper_pipe_links_dropper_widget(fake_engine, tmp_path):
         assert tool.meta == {'ui': {'resourceUri': apps.DROPPER_URI}}
         listed = await client.list_resources()
         assert apps.DROPPER_URI in [str(r.uri) for r in listed.resources]
+
+
+def test_read_ui_resource_unknown_uri_returns_none(apps_dir):
+    assert apps.read_ui_resource('ui://rocketride/nope.html', apps_dir) is None
+
+
+def test_read_ui_resource_missing_bundle_returns_none(tmp_path):
+    assert apps.read_ui_resource(apps.PIPELINES_TABLE_URI, tmp_path) is None

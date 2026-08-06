@@ -90,6 +90,13 @@ async def test_read_resource_unknown_uri_defaults_to_uncached(monkeypatch, fake_
 
     monkeypatch.setattr(resources_mod, 'read_resource', _read_resource_permissive)
 
+    # STATUS_READ_TTL_MS is also 0, so make the else branch distinguishable
+    # from the status branch — the assert below must fail if unknown URIs
+    # ever fall through to the status TTL.
+    import ai.modules.mcp.handlers as handlers_mod
+
+    monkeypatch.setattr(handlers_mod, 'STATUS_READ_TTL_MS', 5_000)
+
     server = build_mcp_server(lambda: fake_engine)
     async with Client(server) as client:
         result = await client.read_resource('rocketride://unknown')

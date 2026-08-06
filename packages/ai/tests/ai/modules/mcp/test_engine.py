@@ -130,6 +130,7 @@ class _FakeUnderlyingClient:
 
     def __init__(self) -> None:
         self.connect_calls = 0
+        self.connect_gate = None  # optional asyncio.Event: connect() suspends until set
         self.disconnect_calls = 0
         self.request_calls = 0
         self.get_services_calls = 0
@@ -151,6 +152,8 @@ class _FakeUnderlyingClient:
 
     async def connect(self) -> None:
         self.connect_calls += 1
+        if self.connect_gate is not None:
+            await self.connect_gate.wait()
 
     async def disconnect(self) -> None:
         self.disconnect_calls += 1
@@ -248,9 +251,21 @@ async def test_ensure_connected_memoizes_across_sequential_calls():
 
 
 async def test_ensure_connected_memoizes_under_concurrent_calls():
+    """Both calls start while the first connect is genuinely suspended, so
+    this pins the lock — an ungated fake could pass with no synchronization
+    at all (first coroutine finishes connect before the second checks).
+    """
     client, fake = _make_client_with_fake()
+    fake.connect_gate = asyncio.Event()
 
-    await asyncio.gather(client.list_tasks(), client.list_tasks())
+    first = asyncio.create_task(client.list_tasks())
+    await asyncio.sleep(0)
+    second = asyncio.create_task(client.list_tasks())
+    await asyncio.sleep(0)
+
+    assert fake.connect_calls == 1  # second call waits on the lock, no second connect
+    fake.connect_gate.set()
+    await asyncio.gather(first, second)
 
     assert fake.connect_calls == 1
     assert client._connected is True
@@ -673,3 +688,42 @@ async def test_log_trace_wraps_keyerror_and_closes_session():
         await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
 
     assert fake.log._session.close_calls == 1
+
+
+async def test_transport_drop_unlatches_connected_so_next_call_reconnects():
+    """A 'Server is not connected' RuntimeError from the SDK clears the
+    cached flag: the singleton must reconnect on the next call instead of
+    failing for the life of the process. An unrelated RuntimeError must NOT
+    clear it (a spurious re-connect() on a live SDK client is unsafe).
+    """
+    client, fake = _make_client_with_fake()
+    await client.get_services()
+    assert client._connected is True
+
+    async def _raise_dropped():
+        raise RuntimeError('Server is not connected')
+
+    fake.get_services = _raise_dropped
+    with pytest.raises(RuntimeError):
+        await client.get_services()
+    assert client._connected is False  # unlatched -> next call reconnects
+
+    # restore, reconnect, then an unrelated RuntimeError keeps the flag set
+    fake.get_services = lambda: _async_value({'services': {}})
+    await client.get_services()
+    assert client._connected is True and fake.connect_calls == 2
+
+    async def _raise_unrelated():
+        raise RuntimeError('bad argument')
+
+    fake.get_services = _raise_unrelated
+    with pytest.raises(RuntimeError):
+        await client.get_services()
+    assert client._connected is True
+
+
+def _async_value(value):
+    async def _coro():
+        return value
+
+    return _coro()

@@ -23,6 +23,8 @@ interface TaskRow {
 
 const app = new App({ name: 'RocketRide pipelines table', version: '0.1.0' });
 const root = document.getElementById('root') as HTMLElement;
+// Announce refresh/terminate re-renders to assistive technology.
+root.setAttribute('aria-live', 'polite');
 
 /**
  * Extract task rows from a CallToolResult. Throws on a host-level tool error
@@ -52,19 +54,20 @@ function parseRows(result: unknown): TaskRow[] {
 	return payload.tasks;
 }
 
+/** Error state that keeps Refresh available — assigning root.textContent
+ * would wipe every child including the button, dead-ending the widget. */
+function showError(message: string): void {
+	root.classList.add('empty');
+	root.replaceChildren();
+	root.append(message, makeRefreshButton());
+}
+
 function makeRefreshButton(): HTMLButtonElement {
 	const reload = document.createElement('button');
 	reload.className = 'rr-btn rr-btn-ghost';
 	reload.textContent = 'Refresh';
-	reload.onclick = async () => {
-		try {
-			await refresh();
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			root.textContent = `Refresh failed: ${msg}`;
-			console.error('refresh failed', err);
-		}
-	};
+	// refresh() catches its own errors and never rejects.
+	reload.onclick = () => void refresh();
 	return reload;
 }
 
@@ -129,7 +132,7 @@ async function refresh(): Promise<void> {
 		render(parseRows(result));
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		root.textContent = `Failed to refresh pipelines: ${msg}`;
+		showError(`Failed to refresh pipelines: ${msg}`);
 		console.error('refresh failed', err);
 	}
 }
@@ -142,7 +145,7 @@ app.ontoolresult = (result) => {
 		render(parseRows(result));
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		root.textContent = `Failed to render pipelines: ${msg}`;
+		showError(`Failed to render pipelines: ${msg}`);
 		console.error('render failed', err);
 	}
 };

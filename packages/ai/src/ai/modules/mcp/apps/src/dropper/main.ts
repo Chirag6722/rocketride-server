@@ -40,6 +40,7 @@ const root = document.getElementById('root') as HTMLElement;
 let info: DropperInfo | null = null;
 
 function parseInfo(result: unknown): DropperInfo | null {
+	if (result === null || typeof result !== 'object') return null;
 	const content = (result as { content?: Array<{ type: string; text?: string }> }).content ?? [];
 	const text = content.find((c) => c.type === 'text')?.text;
 	if (!text) return null;
@@ -90,16 +91,23 @@ interface Block {
 
 /** Media entries arrive as {mime_type, <lane>} where the base64 payload sits
  * under the lane name (dropper-ui's processMediaData), or as bare data URLs. */
+const MIME_RE = /^[\w.+-]+\/[\w.+-]+$/;
+
 function mediaUrls(value: unknown, lane: string): string[] {
 	const fromEntry = (item: unknown): string | null => {
 		if (item !== null && typeof item === 'object') {
 			const record = item as Record<string, unknown>;
 			if (typeof record.mime_type === 'string' && typeof record[lane] === 'string') {
+				// Pipeline output is untrusted: reject malformed mime strings so
+				// they can't corrupt the data URL.
+				if (!MIME_RE.test(record.mime_type)) return null;
 				return `data:${record.mime_type};base64,${record[lane]}`;
 			}
 			return null;
 		}
-		return typeof item === 'string' && item.trim() ? item : null;
+		// Bare strings must already be data: URLs — the MCP Apps MVP forbids
+		// external URLs, and a remote src would leak the render to a third party.
+		return typeof item === 'string' && item.startsWith('data:') ? item : null;
 	};
 	return (Array.isArray(value) ? value : [value])
 		.map(fromEntry)
@@ -242,6 +250,15 @@ function upload(files: FileList | File[]): void {
 			buildDropzone('Try again'),
 		);
 	};
+	// A stalled connection fires neither onerror nor onload — without a
+	// timeout the widget would sit on "Processing…" forever with no dropzone.
+	xhr.timeout = 30 * 60 * 1000;
+	xhr.ontimeout = () => {
+		root.replaceChildren(
+			el('p', 'empty', 'Upload timed out. The pipeline may still be running.'),
+			buildDropzone('Try again'),
+		);
+	};
 	xhr.send(form);
 }
 
@@ -256,6 +273,10 @@ function buildDropzone(prompt: string): HTMLElement {
 	picker.multiple = true;
 	picker.style.display = 'none';
 	picker.onchange = () => picker.files && upload(picker.files);
+	// picker is a child of zone: the synthetic click from zone.onclick bubbles
+	// back to zone and would call picker.click() again (re-entrant loop /
+	// double-opened file dialog). Block it.
+	picker.onclick = (e) => e.stopPropagation();
 	zone.appendChild(picker);
 	zone.onclick = () => picker.click();
 	zone.onkeydown = (e) => {
@@ -265,7 +286,12 @@ function buildDropzone(prompt: string): HTMLElement {
 		}
 	};
 	zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('drag'); };
-	zone.ondragleave = () => zone.classList.remove('drag');
+	zone.ondragleave = (e) => {
+		// dragleave bubbles from children; only clear when leaving the zone.
+		if (!(e.relatedTarget instanceof Node) || !zone.contains(e.relatedTarget)) {
+			zone.classList.remove('drag');
+		}
+	};
 	zone.ondrop = (e) => {
 		e.preventDefault();
 		zone.classList.remove('drag');

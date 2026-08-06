@@ -33,7 +33,9 @@ async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
     server = build_mcp_server(lambda: fake_engine)
     async with Client(server) as client:
         # v2 auto-mode does a `server/discover` probe on entry.
-        assert client.protocol_version == '2026-07-28'
+        from .conftest import PINNED_PROTOCOL_VERSION
+
+        assert client.protocol_version == PINNED_PROTOCOL_VERSION
 
         result = await client.list_tools()
         from .conftest import EXPECTED_TOOL_NAMES
@@ -58,7 +60,9 @@ async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
     # Capabilities are auto-derived from whatever's registered (no separate
     # declaration step) -- tools/resources handlers are registered, prompts
     # never are.
-    caps = server.get_capabilities(protocol_version='2026-07-28')
+    from .conftest import PINNED_PROTOCOL_VERSION
+
+    caps = server.get_capabilities(protocol_version=PINNED_PROTOCOL_VERSION)
     assert caps.tools is not None
     assert caps.resources is not None
     assert caps.prompts is None

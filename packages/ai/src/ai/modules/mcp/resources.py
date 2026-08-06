@@ -12,20 +12,22 @@ import mcp.types as types
 
 from .engine import EngineClient
 
-_PIPELINES = 'rocketride://pipelines'
-_STATUS = 'rocketride://status'
+# Public: handlers.py keys its per-URI cache TTLs off these — a renamed
+# URI must fail loudly there, not silently fall through to ttl_ms=0.
+PIPELINES_URI = 'rocketride://pipelines'
+STATUS_URI = 'rocketride://status'
 
 
 def list_resources() -> List[types.Resource]:
     return [
         types.Resource(
-            uri=_PIPELINES,
+            uri=PIPELINES_URI,
             name='Deployments',
             description='Deployments registered on the connected RocketRide server',
             mime_type='application/json',
         ),
         types.Resource(
-            uri=_STATUS,
+            uri=STATUS_URI,
             name='Server Status',
             description='Current RocketRide server status and running tasks',
             mime_type='application/json',
@@ -35,9 +37,9 @@ def list_resources() -> List[types.Resource]:
 
 async def read_resource(engine: EngineClient, uri: str) -> str:
     uri = str(uri)
-    if uri == _PIPELINES:
+    if uri == PIPELINES_URI:
         return json.dumps(await engine.deploy_list())
-    if uri == _STATUS:
+    if uri == STATUS_URI:
         tasks = await engine.list_tasks()
         names = [t.get('name') for t in tasks if t.get('name')]
         return json.dumps({'connected': True, 'pipeline_count': len(names), 'pipelines': names})

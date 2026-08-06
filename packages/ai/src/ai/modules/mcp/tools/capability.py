@@ -5,11 +5,29 @@ deployments (`deploy_add`, `deploy_list`, `deploy_status`, `deploy_remove`,
 `deploy_update`).
 """
 
-from typing import Any, Dict
+import asyncio
+from typing import Any, Dict, Optional, Tuple
 
 from ..errors import _bad
+from ..errors import _timeout
 from ..tooling import ToolRegistry
 from ._common import load_pipeline_async
+
+DEFAULT_TIMEOUT_SECONDS = 30
+
+
+async def _engine_call(coro: Any, tool_name: str) -> Tuple[Any, Optional[dict]]:
+    """Await ``coro`` under the standard seam timeout.
+
+    Returns ``(result, None)`` or ``(None, timeout_envelope)`` — the same
+    wait_for + in-band Timeout contract the execution/logs/visibility tools
+    use, so no store/deploy call can hold a tool call open unbounded.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=DEFAULT_TIMEOUT_SECONDS), None
+    except asyncio.TimeoutError:
+        return None, _timeout(f'{tool_name} timed out waiting for the engine', f'retry {tool_name}')
+
 
 _PIPELINE_OR_FILEPATH_SCHEMA_PROPS = {
     'pipeline': {'type': 'object', 'description': 'Inline pipeline definition'},
@@ -103,13 +121,17 @@ async def _store_read(client, tasks, args: Dict[str, Any]) -> dict:
     if not path:
         return _bad('path is required', 'pass a store file path (see store_list)')
 
-    content = await client.fs_read_string(path)
+    content, err = await _engine_call(client.fs_read_string(path), 'store_read')
+    if err:
+        return err
     return {'ok': True, 'path': path, 'content': content}
 
 
 async def _store_list(client, tasks, args: Dict[str, Any]) -> dict:
     path = args.get('path') or ''
-    listing = await client.fs_list_dir(path)
+    listing, err = await _engine_call(client.fs_list_dir(path), 'store_list')
+    if err:
+        return err
     return {'ok': True, 'path': path, 'listing': listing}
 
 
@@ -118,7 +140,9 @@ async def _store_stat(client, tasks, args: Dict[str, Any]) -> dict:
     if not path:
         return _bad('path is required', 'pass a store file or directory path (see store_list)')
 
-    stat = await client.fs_stat(path)
+    stat, err = await _engine_call(client.fs_stat(path), 'store_stat')
+    if err:
+        return err
     return {'ok': True, 'path': path, 'stat': stat}
 
 
@@ -132,7 +156,11 @@ async def _store_get_url(client, tasks, args: Dict[str, Any]) -> dict:
         expires_in = 3600
     elif not isinstance(expires_in, int) or isinstance(expires_in, bool) or expires_in < 1:
         return _bad('expires_in must be a positive integer', 'omit it to use the 3600-second default')
-    url = await client.fs_get_url(path, expires_in=expires_in, download_name=args.get('download_name'))
+    url, err = await _engine_call(
+        client.fs_get_url(path, expires_in=expires_in, download_name=args.get('download_name')), 'store_get_url'
+    )
+    if err:
+        return err
     return {'ok': True, 'path': path, 'url': url, 'expires_in': expires_in}
 
 
@@ -142,7 +170,9 @@ async def _save_template(client, tasks, args: Dict[str, Any]) -> dict:
         return _bad('template_id is required', 'name the template')
 
     pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
-    await client.save_template(template_id, pipeline)
+    _, err = await _engine_call(client.save_template(template_id, pipeline), 'save_template')
+    if err:
+        return err
     return {'ok': True, 'template_id': template_id}
 
 
@@ -155,18 +185,25 @@ async def _load_template(client, tasks, args: Dict[str, Any]) -> dict:
     # ``save_template`` (see rocketride.mixins.store: both sides read/write
     # `.templates/<id>.json` as the bare pipeline, with no wrapping record) --
     # return it directly rather than unwrapping a nonexistent ``pipeline`` key.
-    pipeline = await client.get_template(template_id)
+    pipeline, err = await _engine_call(client.get_template(template_id), 'load_template')
+    if err:
+        return err
     return {'ok': True, 'template_id': template_id, 'pipeline': pipeline}
 
 
 async def _deploy_add(client, tasks, args: Dict[str, Any]) -> dict:
     pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
-    deployment = await client.deploy_add(pipeline, schedule=args.get('schedule'))
+    deployment, err = await _engine_call(client.deploy_add(pipeline, schedule=args.get('schedule')), 'deploy_add')
+    if err:
+        return err
     return {'ok': True, 'deployment': deployment}
 
 
 async def _deploy_list(client, tasks, args: Dict[str, Any]) -> dict:
-    deployments = (await client.deploy_list()) or []
+    deployments, err = await _engine_call(client.deploy_list(), 'deploy_list')
+    if err:
+        return err
+    deployments = deployments or []
     return {'ok': True, 'deployments': deployments, 'count': len(deployments)}
 
 
@@ -175,7 +212,9 @@ async def _deploy_status(client, tasks, args: Dict[str, Any]) -> dict:
     if not project_id:
         return _bad('project_id is required', 'pass a deployment project_id (see deploy_list)')
 
-    deployment = await client.deploy_status(project_id)
+    deployment, err = await _engine_call(client.deploy_status(project_id), 'deploy_status')
+    if err:
+        return err
     return {'ok': True, 'deployment': deployment}
 
 
@@ -184,7 +223,9 @@ async def _deploy_remove(client, tasks, args: Dict[str, Any]) -> dict:
     if not project_id:
         return _bad('project_id is required', 'pass a deployment project_id (see deploy_list)')
 
-    await client.deploy_remove(project_id)
+    _, err = await _engine_call(client.deploy_remove(project_id), 'deploy_remove')
+    if err:
+        return err
     return {'ok': True, 'removed': project_id}
 
 
@@ -200,7 +241,9 @@ async def _deploy_update(client, tasks, args: Dict[str, Any]) -> dict:
     if pipeline is None and schedule is None:
         return _bad('nothing to update', 'pass a replacement pipeline/filepath and/or a schedule')
 
-    await client.deploy_update(project_id, pipeline=pipeline, schedule=schedule)
+    _, err = await _engine_call(client.deploy_update(project_id, pipeline=pipeline, schedule=schedule), 'deploy_update')
+    if err:
+        return err
     updated = [k for k, v in (('pipeline', pipeline), ('schedule', schedule)) if v is not None]
     return {'ok': True, 'project_id': project_id, 'updated': updated}
 

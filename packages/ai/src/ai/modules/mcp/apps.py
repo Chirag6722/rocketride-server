@@ -68,10 +68,26 @@ def list_ui_resources(apps_dir: Optional[Path] = None, engine_origin: Optional[s
     return out
 
 
+# Widget bundles are static after the build; cache reads per path with the
+# mtime in the value, so the request path skips repeated blocking file I/O
+# while a rebuilt bundle still invalidates naturally. Bounded by the number
+# of specs (one entry per widget path).
+_HTML_CACHE: dict = {}
+
+
 def read_ui_resource(uri: str, apps_dir: Optional[Path] = None) -> Optional[str]:
     """Return the widget HTML for ``uri``, or None if unknown/not built."""
     base = apps_dir if apps_dir is not None else _APPS_DIST
     for spec in APPS:
-        if spec.uri == uri and (base / spec.filename).is_file():
-            return (base / spec.filename).read_text(encoding='utf-8')
+        if spec.uri == uri:
+            path = base / spec.filename
+            try:
+                mtime_ns = path.stat().st_mtime_ns
+            except OSError:
+                continue
+            cached = _HTML_CACHE.get(str(path))
+            if cached is None or cached[0] != mtime_ns:
+                cached = (mtime_ns, path.read_text(encoding='utf-8'))
+                _HTML_CACHE[str(path)] = cached
+            return cached[1]
     return None

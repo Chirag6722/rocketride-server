@@ -126,10 +126,11 @@ async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
     except asyncio.TimeoutError:
         return _timeout('log_traces timed out waiting for the engine', 'retry log_traces')
     except LogNotFound:
+        target = f'chapter {chapter_begin_seq}' if chapter_begin_seq is not None else 'the latest run'
         return {
             'ok': False,
             'error_type': 'NotFound',
-            'message': f'chapter {chapter_begin_seq} not found or expired',
+            'message': f'{target} was not found or expired',
             'hint': _RETENTION_HINT,
         }
     result = result or {}

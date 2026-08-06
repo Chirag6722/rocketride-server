@@ -416,3 +416,18 @@ async def test_deploy_update_pipeline_and_schedule(fake_engine):
 
     assert result == {'ok': True, 'project_id': 'dep-1', 'updated': ['pipeline', 'schedule']}
     assert fake_engine.deploy_updated == [{'project_id': 'dep-1', 'pipeline': pipeline, 'schedule': '0 * * * *'}]
+
+
+@pytest.mark.asyncio
+async def test_store_get_url_rejects_invalid_expires_in(fake_engine):
+    """Zero, negative, boolean, and string expires_in all return BadRequest
+    without reaching the engine seam.
+    """
+    registry = ToolRegistry()
+    capability.register(registry)
+
+    for bad_value in (0, -5, True, '60'):
+        result = await registry.handler('store_get_url')(fake_engine, None, {'path': 'f.txt', 'expires_in': bad_value})
+        assert result['ok'] is False, bad_value
+        assert result['error_type'] == 'BadRequest', bad_value
+    assert fake_engine.fs_get_url_calls == []

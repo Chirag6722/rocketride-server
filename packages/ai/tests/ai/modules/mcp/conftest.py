@@ -10,6 +10,9 @@ import pytest
 # introspection, execution, capability, visibility, logs). Single source of
 # truth for the suite — assert against this instead of copying the list or
 # hard-coding its count in individual test files.
+# The MCP protocol revision this surface pins its tests against.
+PINNED_PROTOCOL_VERSION = '2026-07-28'
+
 EXPECTED_TOOL_NAMES = (
     # introspection
     'list_components',
