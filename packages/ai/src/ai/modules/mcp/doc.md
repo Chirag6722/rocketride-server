@@ -17,6 +17,59 @@ bridge required. It supersedes the earlier 2-tool port, which exposed a dynamic
 per-pipeline `{filepath}` tool plus a `RocketRide_Document_Processor` convenience
 tool; both are removed (see "History" below).
 
+## Protocol
+
+The mounted `StreamableHTTPSessionManager` serves **both** MCP protocol revisions on
+the same `/mcp` endpoint, unconditionally — the SDK (`mcp==2.0.0`) inspects the
+`MCP-Protocol-Version` request header per request and routes accordingly, with no
+opt-in flag on our side:
+
+- **`2026-07-28`** (current) — any request whose `MCP-Protocol-Version` header is
+  present and is *not* one of the legacy handshake versions is routed to the modern
+  per-request path (`mcp.server._streamable_http_modern`): no `initialize` handshake,
+  no `Mcp-Session-Id`, one JSON-RPC request in, one JSON-RPC response out.
+- **`2025-11-25`** (and `2024-11-05` / `2025-03-26` / `2025-06-18`) — a request with no
+  `MCP-Protocol-Version` header, or one of those four handshake-era values, falls
+  through to the legacy `initialize`-handshake path instead. Because this module runs
+  `stateless=True`, the legacy path also stays stateless per request (a fresh
+  transport per POST, no `Mcp-Session-Id` minted) — legacy clients still complete the
+  full `initialize` → `notifications/initialized` → `tools/list`/`tools/call` sequence,
+  they just get no session continuity across POSTs, same as the modern path.
+
+  This dual-revision serving is what keeps a 2025-era client (Claude Desktop, Cursor,
+  or any Streamable-HTTP client that hasn't shipped 2026-07-28 support yet) working
+  against this endpoint without any server-side branching of our own — pinned by
+  `packages/ai/tests/ai/modules/mcp/test_dual_revision.py`.
+
+### Required request headers (2026-07-28 path only)
+
+On the modern per-request path, the SDK validates two headers against the JSON-RPC
+body and rejects a mismatch with `HEADER_MISMATCH` (`-32020`) before the request ever
+reaches a handler — this module does not implement or override this check, it is
+enforced entirely inside the SDK's inbound classifier:
+
+| Header | Must equal | Applies to |
+| --- | --- | --- |
+| `Mcp-Method` | `body.method` | every request |
+| `Mcp-Name` | the body's `name` (`tools/call`, `prompts/get`) or `uri` (`resources/read`) param | only `tools/call`, `prompts/get`, `resources/read` |
+
+`MCP-Protocol-Version` is also checked at this rung: it must equal
+`params._meta.protocolVersion` in the body, or the request is rejected the same way.
+Legacy-path requests (see above) are not subject to this header rung at all — it is
+only exercised on the modern route.
+
+### Cache-hint policy
+
+`cache_policy.py` sets `ttl_ms`/`cache_scope` (wire: `ttlMs`/`cacheScope`, SEP-2549)
+on every `CacheableResult` this module returns:
+
+| Result | `ttl_ms` | `cache_scope` | Rationale |
+| --- | --- | --- | --- |
+| `tools/list` | `3_600_000` (1h) | `private` | Static per build, but kept private (not public) because tool listings become entitlement-filtered once node-auth lands. |
+| `resources/list` | `30_000` (30s) | `private` | Reflects currently-running tasks — short-lived, not build-static. |
+| `rocketride://status` read | `0` | `private` | Live connection/task-count snapshot — immediately stale, must not be cached at all. |
+| `rocketride://pipelines` read | `30_000` (30s) | `private` | Reflects running tasks, same rationale as `resources/list`. |
+
 ## How it boots
 
 `initModule(server, config)` in `__init__.py`:
@@ -56,8 +109,10 @@ Dispatch is registry-based: `tooling.ToolRegistry` holds `{name -> (description,
 inputSchema, handler)}`; `tools/__init__.register_all(registry)` populates one shared
 registry per server by calling each tool group's own `register(registry)`.
 `handlers.build_mcp_server` builds that one registry plus one `registry.TaskRegistry`
-and wires them into a single `mcp.server.lowlevel.Server('rocketride-mcp')` via
-`@server.list_tools/call_tool/list_resources/read_resource`. Every handler has the
+and wires them into a single `mcp.server.lowlevel.Server('rocketride-mcp')` via the
+`on_list_tools`/`on_call_tool`/`on_list_resources`/`on_read_resource` constructor
+kwargs (the SDK v2 registration surface — the v1 `@server.list_tools()`-style
+decorators were removed; see "Protocol" above). Every handler has the
 signature `async def handler(client: EngineClient, tasks: TaskRegistry, args: dict) -> dict`.
 
 All tools are static and typed (fixed name + JSON Schema) — there is no dynamic

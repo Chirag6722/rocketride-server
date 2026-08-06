@@ -37,7 +37,7 @@ class ToolRegistry:
     def tools(self) -> List[types.Tool]:
         """Return the registered tools as MCP ``types.Tool`` descriptors."""
         return [
-            types.Tool(name=name, description=entry.description, inputSchema=entry.schema)
+            types.Tool(name=name, description=entry.description, input_schema=entry.schema)
             for name, entry in self._entries.items()
         ]
 

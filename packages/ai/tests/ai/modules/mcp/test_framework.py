@@ -175,7 +175,7 @@ def test_tool_registry_register_and_tools():
     assert isinstance(tools[0], types.Tool)
     assert tools[0].name == 'do_thing'
     assert tools[0].description == 'Does a thing'
-    assert tools[0].inputSchema == schema
+    assert tools[0].input_schema == schema
 
 
 def test_tool_registry_handler_returns_registered_fn():

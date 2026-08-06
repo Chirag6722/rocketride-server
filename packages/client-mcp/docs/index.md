@@ -324,6 +324,14 @@ result = await session.get_prompt(
 
 ## SSE Mode
 
+> **Deprecated.** The legacy HTTP+SSE transport this mode implements is formally
+> **Deprecated** as of MCP spec revision `2026-07-28` (12-month deprecation window).
+> The maintained HTTP surface for RocketRide is the Streamable-HTTP server in
+> `ai/modules/mcp`, served in-process at `/mcp` on the engine's own HTTP port — it
+> supersedes `rocketride-mcp-sse` and requires no separate process. New integrations
+> should target that endpoint instead of SSE mode; see
+> `packages/ai/src/ai/modules/mcp/doc.md` for its protocol and tool surface.
+
 For remote or Docker deployments, the server can run as an HTTP/SSE server instead of stdio:
 
 ```bash

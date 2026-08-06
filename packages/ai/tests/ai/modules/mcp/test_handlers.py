@@ -5,11 +5,19 @@ the resource wiring it keeps (status / pipelines, no nodes).
 Dispatch tests inject a dummy tool by monkeypatching `tools_pkg.register_all`
 (the real one is a no-op until Tasks 4-7 land real tool modules), matching
 the brief's "ToolRegistry containing one dummy tool" scenario.
+
+Dispatch is exercised through the v2 in-memory `mcp.client.Client` rather
+than introspecting `server.request_handlers` -- that attribute no longer
+exists on the v2 low-level `Server` (handlers are registered via constructor
+kwargs / `add_request_handler`, not decorators).
 """
 
 import json
 
 import pytest
+
+from mcp.client import Client
+from mcp.shared.exceptions import MCPError
 
 
 def _dummy_schema():
@@ -19,7 +27,6 @@ def _dummy_schema():
 @pytest.mark.asyncio
 async def test_call_tool_dispatches_to_registered_handler(monkeypatch, fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     def _register_all(registry):
         @registry.register('dummy_tool', 'A dummy tool', _dummy_schema())
@@ -29,31 +36,24 @@ async def test_call_tool_dispatches_to_registered_handler(monkeypatch, fake_engi
     monkeypatch.setattr(handlers_mod.tools_pkg, 'register_all', _register_all)
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.CallToolRequest]
-    req = types.CallToolRequest(
-        method='tools/call', params=types.CallToolRequestParams(name='dummy_tool', arguments={})
-    )
-    result = await handler(req)
+    async with Client(server) as client:
+        result = await client.call_tool('dummy_tool', {})
 
-    call_result = result.root
-    assert call_result.isError is False
-    assert json.loads(call_result.content[0].text) == {'ok': True, 'thing': 1}
+    assert result.is_error is False
+    assert json.loads(result.content[0].text) == {'ok': True, 'thing': 1}
 
 
 @pytest.mark.asyncio
 async def test_call_tool_unknown_name_returns_error_result_not_crash(fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.CallToolRequest]
-    req = types.CallToolRequest(method='tools/call', params=types.CallToolRequestParams(name='nope', arguments={}))
-    result = await handler(req)
+    async with Client(server) as client:
+        result = await client.call_tool('nope', {})
 
-    call_result = result.root
     # A structured, self-correctable result -- not a crash, not an MCP tool error.
-    assert call_result.isError is False
-    payload = json.loads(call_result.content[0].text)
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
     assert payload['ok'] is False
     assert payload['error_type'] == 'UnknownTool'
 
@@ -61,7 +61,6 @@ async def test_call_tool_unknown_name_returns_error_result_not_crash(fake_engine
 @pytest.mark.asyncio
 async def test_call_tool_hard_error_surfaces_as_mcp_tool_error(monkeypatch, fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     def _register_all(registry):
         @registry.register('flaky_tool', 'raises a fake ConnectionError', _dummy_schema())
@@ -74,21 +73,58 @@ async def test_call_tool_hard_error_surfaces_as_mcp_tool_error(monkeypatch, fake
     monkeypatch.setattr(handlers_mod.tools_pkg, 'register_all', _register_all)
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.CallToolRequest]
-    req = types.CallToolRequest(
-        method='tools/call', params=types.CallToolRequestParams(name='flaky_tool', arguments={})
-    )
-    result = await handler(req)
+    # v2 has no `isError`-content escape hatch for arbitrary raised exceptions --
+    # they map to a generic "Internal server error" unless the handler maps
+    # them to an explicit MCPError, which is exactly what HardError does now.
+    #
+    # Catch inside the `async with` block, not around it: letting the MCPError
+    # propagate out of the block means Client.__aexit__ tears down its
+    # internal task group while an exception is still in flight, which anyio
+    # re-wraps as a BaseExceptionGroup -- an artifact of session teardown, not
+    # part of the contract under test.
+    caught = None
+    async with Client(server) as client:
+        try:
+            await client.call_tool('flaky_tool', {})
+        except MCPError as exc:
+            caught = exc
 
-    call_result = result.root
-    assert call_result.isError is True
-    assert 'lost link' in call_result.content[0].text
+    assert caught is not None
+    assert 'lost link' in str(caught)
+
+
+@pytest.mark.asyncio
+async def test_hard_error_surfaces_message_as_mcp_error(fake_engine):
+    """Pins the HardError -> MCPError mapping via the `registry=` test seam,
+    independent of monkeypatching `tools_pkg.register_all`.
+    """
+    from ai.modules.mcp.handlers import build_mcp_server
+    from ai.modules.mcp.tooling import ToolRegistry
+
+    registry = ToolRegistry()
+
+    @registry.register('boom', 'always hard-fails', _dummy_schema())
+    async def _boom(engine, task_registry, arguments):
+        raise ConnectionError('engine unreachable')  # HARD_EXC_NAMES member
+
+    server = build_mcp_server(lambda: fake_engine, registry=registry)
+
+    # See the note in test_call_tool_hard_error_surfaces_as_mcp_tool_error above
+    # for why the catch happens inside the `async with` block.
+    caught = None
+    async with Client(server) as client:
+        try:
+            await client.call_tool('boom', {})
+        except MCPError as exc:
+            caught = exc
+
+    assert caught is not None
+    assert 'engine unreachable' in str(caught)
 
 
 @pytest.mark.asyncio
 async def test_list_tools_reflects_registry(monkeypatch, fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     def _register_all(registry):
         @registry.register('one_tool', 'desc', _dummy_schema())
@@ -98,10 +134,10 @@ async def test_list_tools_reflects_registry(monkeypatch, fake_engine):
     monkeypatch.setattr(handlers_mod.tools_pkg, 'register_all', _register_all)
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.ListToolsRequest]
-    result = await handler(types.ListToolsRequest(method='tools/list'))
+    async with Client(server) as client:
+        result = await client.list_tools()
 
-    assert {t.name for t in result.root.tools} == {'one_tool'}
+    assert {t.name for t in result.tools} == {'one_tool'}
 
 
 @pytest.mark.asyncio
@@ -111,13 +147,12 @@ async def test_list_tools_reflects_real_register_all(fake_engine):
     are wired in).
     """
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.ListToolsRequest]
-    result = await handler(types.ListToolsRequest(method='tools/list'))
+    async with Client(server) as client:
+        result = await client.list_tools()
 
-    names = {t.name for t in result.root.tools}
+    names = {t.name for t in result.tools}
     assert names == {
         'list_components',
         'describe_component',
@@ -148,28 +183,22 @@ async def test_list_tools_reflects_real_register_all(fake_engine):
 @pytest.mark.asyncio
 async def test_list_resources_returns_exactly_status_and_pipelines(fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.ListResourcesRequest]
-    result = await handler(types.ListResourcesRequest(method='resources/list'))
+    async with Client(server) as client:
+        result = await client.list_resources()
 
-    uris = {str(r.uri) for r in result.root.resources}
+    uris = {str(r.uri) for r in result.resources}
     assert uris == {'rocketride://status', 'rocketride://pipelines'}
 
 
 @pytest.mark.asyncio
 async def test_read_pipelines_resource_calls_deploy_list(fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.ReadResourceRequest]
-    await handler(
-        types.ReadResourceRequest(
-            method='resources/read', params=types.ReadResourceRequestParams(uri='rocketride://pipelines')
-        )
-    )
+    async with Client(server) as client:
+        await client.read_resource('rocketride://pipelines')
 
     assert fake_engine.deploy_list_calls == 1
 
@@ -177,15 +206,10 @@ async def test_read_pipelines_resource_calls_deploy_list(fake_engine):
 @pytest.mark.asyncio
 async def test_read_status_resource_calls_list_tasks(fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.ReadResourceRequest]
-    await handler(
-        types.ReadResourceRequest(
-            method='resources/read', params=types.ReadResourceRequestParams(uri='rocketride://status')
-        )
-    )
+    async with Client(server) as client:
+        await client.read_resource('rocketride://status')
 
     assert fake_engine.list_tasks_calls == 1
 
@@ -274,7 +298,6 @@ async def test_flow_dispatcher_ignores_body_with_missing_flow_id():
 @pytest.mark.asyncio
 async def test_build_mcp_server_uses_passed_in_task_registry(monkeypatch, fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
     from ai.modules.mcp.registry import TaskRegistry
 
     tasks = TaskRegistry()
@@ -288,11 +311,8 @@ async def test_build_mcp_server_uses_passed_in_task_registry(monkeypatch, fake_e
     monkeypatch.setattr(handlers_mod.tools_pkg, 'register_all', _register_all)
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine, task_registry=tasks)
-    handler = server.request_handlers[types.CallToolRequest]
-    req = types.CallToolRequest(
-        method='tools/call', params=types.CallToolRequestParams(name='registry_probe', arguments={})
-    )
-    result = await handler(req)
+    async with Client(server) as client:
+        result = await client.call_tool('registry_probe', {})
 
-    payload = json.loads(result.root.content[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload == {'sees_preexisting': True}

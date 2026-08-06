@@ -9,11 +9,19 @@ prompt surface -- "knowledge lives in Skills," not MCP prompts.
 
 import json
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
+from mcp.shared.exceptions import MCPError
 
+from .cache_policy import (
+    CACHE_SCOPE,
+    PIPELINES_READ_TTL_MS,
+    RESOURCES_LIST_TTL_MS,
+    STATUS_READ_TTL_MS,
+    TOOLS_TTL_MS,
+)
 from .engine import EngineClient
 from .errors import HardError, normalize_error
 from .registry import TaskRegistry
@@ -57,7 +65,10 @@ def make_flow_dispatcher(tasks: TaskRegistry) -> Callable[[Dict[str, Any]], Awai
 
 
 def build_mcp_server(
-    engine_factory: Callable[[], EngineClient], task_registry: Optional[TaskRegistry] = None
+    engine_factory: Callable[[], EngineClient],
+    task_registry: Optional[TaskRegistry] = None,
+    *,
+    registry: Optional[ToolRegistry] = None,
 ) -> Server:
     """Build and return a low-level MCP Server wired with tools and resources.
 
@@ -74,22 +85,27 @@ def build_mcp_server(
             to a flow-event dispatcher via `make_flow_dispatcher`). When omitted,
             a fresh registry is created here (back-compat for callers/tests that
             don't need flow-event buffering).
+        registry: Optional pre-built `ToolRegistry`. Keyword-only test seam --
+            production callers never pass this; when omitted (the normal case),
+            a fresh registry is built here via `tools.register_all`.
 
     Returns:
         A configured mcp.server.lowlevel.Server ready to run.
     """
-    server: Server = Server('rocketride-mcp')
-
-    registry = ToolRegistry()
-    tools_pkg.register_all(registry)
+    if registry is None:
+        registry = ToolRegistry()
+        tools_pkg.register_all(registry)
     task_registry = task_registry if task_registry is not None else TaskRegistry()
 
-    @server.list_tools()
-    async def _list_tools() -> List[types.Tool]:
-        return registry.tools()
+    async def _on_list_tools(ctx, params: types.PaginatedRequestParams | None) -> types.ListToolsResult:
+        return types.ListToolsResult(
+            tools=registry.tools(),
+            ttl_ms=TOOLS_TTL_MS,
+            cache_scope=CACHE_SCOPE,
+        )
 
-    @server.call_tool()
-    async def _call_tool(name: str, arguments: dict) -> List[types.TextContent]:
+    async def _on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+        name, arguments = params.name, dict(params.arguments or {})
         handler = registry.handler(name)
         if handler is None:
             result = {
@@ -101,19 +117,57 @@ def build_mcp_server(
         else:
             try:
                 result = await handler(engine_factory(), task_registry, arguments)
-            except HardError:
-                raise
+            except HardError as exc:
+                # v2 maps arbitrary exceptions to a generic -32603 'Internal server
+                # error', which would swallow the message agents need (connection
+                # lost, auth failed). MCPError carries it to the wire verbatim.
+                raise MCPError(types.INTERNAL_ERROR, exc.message) from exc
             except Exception as exc:  # noqa: BLE001 - normalized below
                 logger.exception('Unhandled exception in MCP tool %r', name)
-                result = normalize_error(exc)
-        return [types.TextContent(type='text', text=json.dumps(result, default=str))]
+                try:
+                    result = normalize_error(exc)
+                except HardError as hard_exc:
+                    # normalize_error itself reclassifies some exceptions (by type
+                    # name) into HardError -- that raise happens from *inside* this
+                    # except block, so it is not seen by the `except HardError`
+                    # clause above (a new exception raised in an except suite is
+                    # never matched against sibling clauses of the same try). Map
+                    # it here too, for the same reason: preserve the message
+                    # instead of letting v2's catch-all reduce it to "Internal
+                    # server error".
+                    raise MCPError(types.INTERNAL_ERROR, hard_exc.message) from hard_exc
+        return types.CallToolResult(content=[types.TextContent(type='text', text=json.dumps(result, default=str))])
 
-    @server.list_resources()
-    async def _list_resources() -> List[types.Resource]:
-        return resources_mod.list_resources()
+    async def _on_list_resources(ctx, params: types.PaginatedRequestParams | None) -> types.ListResourcesResult:
+        return types.ListResourcesResult(
+            resources=resources_mod.list_resources(),
+            ttl_ms=RESOURCES_LIST_TTL_MS,
+            cache_scope=CACHE_SCOPE,
+        )
 
-    @server.read_resource()
-    async def _read_resource(uri: types.AnyUrl) -> str:
-        return await resources_mod.read_resource(engine_factory(), str(uri))
+    async def _on_read_resource(ctx, params: types.ReadResourceRequestParams) -> types.ReadResourceResult:
+        uri_str = str(params.uri)
+        text = await resources_mod.read_resource(engine_factory(), uri_str)
+        # Per-URI cache TTL: status is live state (no caching), pipelines reflect running
+        # tasks (30s), unknown URIs default to uncached (0) for safety.
+        if uri_str == 'rocketride://status':
+            ttl_ms = STATUS_READ_TTL_MS
+        elif uri_str == 'rocketride://pipelines':
+            ttl_ms = PIPELINES_READ_TTL_MS
+        else:
+            ttl_ms = 0
+        return types.ReadResourceResult(
+            contents=[types.TextResourceContents(uri=params.uri, mimeType='application/json', text=text)],
+            ttl_ms=ttl_ms,
+            cache_scope=CACHE_SCOPE,
+        )
+
+    server = Server(
+        'rocketride-mcp',
+        on_list_tools=_on_list_tools,
+        on_call_tool=_on_call_tool,
+        on_list_resources=_on_list_resources,
+        on_read_resource=_on_read_resource,
+    )
 
     return server

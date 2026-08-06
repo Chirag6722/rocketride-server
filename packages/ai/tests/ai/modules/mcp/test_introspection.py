@@ -230,18 +230,13 @@ async def test_describe_pipeline_raises_value_error_when_no_input(fake_engine):
 @pytest.mark.asyncio
 async def test_list_components_via_real_dispatch(fake_engine):
     import ai.modules.mcp.handlers as handlers_mod
-    import mcp.types as types
+    from mcp.client import Client
 
     server = handlers_mod.build_mcp_server(lambda: fake_engine)
-    handler = server.request_handlers[types.CallToolRequest]
-    req = types.CallToolRequest(
-        method='tools/call', params=types.CallToolRequestParams(name='list_components', arguments={})
-    )
+    async with Client(server) as client:
+        result = await client.call_tool('list_components', {})
 
-    result = await handler(req)
-
-    call_result = result.root
-    assert call_result.isError is False
-    payload = json.loads(call_result.content[0].text)
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
     assert payload['ok'] is True
     assert {c['name'] for c in payload['components']} == {'ocr', 'anthropic'}

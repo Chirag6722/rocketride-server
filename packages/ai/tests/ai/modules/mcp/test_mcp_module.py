@@ -1,4 +1,6 @@
 # Copyright 2026 Aparavi Software AG. MIT License.
+import json
+
 import pytest
 
 
@@ -11,45 +13,77 @@ def test_module_exposes_initmodule():
 
 @pytest.mark.asyncio
 async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
-    """With the real `register_all`, the server serves the introspection,
-    execution, and capability tools -- dispatch is registry-based now, not
-    the old dynamic per-pipeline surface. See test_handlers.py for the
-    registry-population/dispatch cases.
+    """End-to-end smoke over the v2 in-memory `Client`, against the real
+    `register_all` registry -- dispatch is registry-based now, not the old
+    dynamic per-pipeline surface. See test_handlers.py for the
+    registry-population/dispatch cases, test_cache_policy.py for the
+    cache-hint assertions this test intentionally does not duplicate.
+
+    Covers: tool discovery (count + full set + order pin), one call_tool
+    round trip (`list_running_pipelines` against `fake_engine`), one
+    read_resource round trip (`rocketride://status`), and -- new in v2 --
+    that the auto-mode `Client` actually discovered the server (protocol
+    version negotiated via `server/discover`) and that capabilities are
+    auto-derived from registered handlers: tools + resources, no prompts
+    (sdk-api-notes.md §5, §7).
     """
+    from mcp.client import Client
     from ai.modules.mcp.handlers import build_mcp_server
 
     server = build_mcp_server(lambda: fake_engine)
-    # low-level Server stores handlers in request_handlers keyed by request type
-    import mcp.types as types
+    async with Client(server) as client:
+        # v2 auto-mode does a `server/discover` probe on entry.
+        assert client.protocol_version == '2026-07-28'
 
-    handler = server.request_handlers[types.ListToolsRequest]
-    result = await handler(types.ListToolsRequest(method='tools/list'))
-    names = {t.name for t in result.root.tools}
-    assert names == {
-        'list_components',
-        'describe_component',
-        'validate_pipeline',
-        'describe_pipeline',
-        'run_pipeline',
-        'run_dropper_pipe',
-        'send_data',
-        'terminate',
-        'send_files',
-        'store_read',
-        'store_list',
-        'store_stat',
-        'store_get_url',
-        'save_template',
-        'load_template',
-        'deploy_add',
-        'deploy_list',
-        'deploy_status',
-        'deploy_remove',
-        'deploy_update',
-        'monitor',
-        'list_running_pipelines',
-        'get_pipeline_trace',
-    }
+        result = await client.list_tools()
+        names = [t.name for t in result.tools]
+        assert set(names) == {
+            'list_components',
+            'describe_component',
+            'validate_pipeline',
+            'describe_pipeline',
+            'run_pipeline',
+            'run_dropper_pipe',
+            'send_data',
+            'terminate',
+            'send_files',
+            'store_read',
+            'store_list',
+            'store_stat',
+            'store_get_url',
+            'save_template',
+            'load_template',
+            'deploy_add',
+            'deploy_list',
+            'deploy_status',
+            'deploy_remove',
+            'deploy_update',
+            'monitor',
+            'list_running_pipelines',
+            'get_pipeline_trace',
+        }
+        # Order pin (see also test_cache_policy.py::test_list_tools_order_is_deterministic_and_pinned).
+        assert names[0] == 'list_components'
+        assert names[-1] == 'get_pipeline_trace'
+
+        call_result = await client.call_tool('list_running_pipelines', {})
+        assert call_result.is_error is False
+        payload = json.loads(call_result.content[0].text)
+        assert payload['ok'] is True
+        assert payload['count'] == len(payload['tasks'])
+        assert payload['tasks'][0]['token']
+
+        resource_result = await client.read_resource('rocketride://status')
+        resource_payload = json.loads(resource_result.contents[0].text)
+        assert resource_payload['connected'] is True
+
+    # Capabilities are auto-derived from whatever's registered (no separate
+    # declaration step) -- tools/resources handlers are registered, prompts
+    # never are.
+    caps = server.get_capabilities(protocol_version='2026-07-28')
+    assert caps.tools is not None
+    assert caps.resources is not None
+    assert caps.prompts is None
 
 
 @pytest.mark.asyncio
@@ -182,15 +216,20 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
     must still close it — the reordering to drain-then-close must not turn
     into "never close".
 
-    Drives the module through its real mounted ASGI endpoint with the MCP
-    SDK's own streamable-HTTP client (over an in-process ASGI transport, no
-    sockets) so `engine_factory()` is invoked via the actual closure created
-    inside `initModule`, not a stand-in built directly in the test.
+    Drives the module through its real startup/shutdown lifespan hooks and
+    the actual `mcp_server` object `initModule` builds internally (captured
+    via the `build_mcp_server` seam, same monkeypatch-and-capture pattern as
+    test_initmodule_wires_flow_dispatcher_through_engine_factory above), so
+    `engine_factory()` fires through the real closure created inside
+    `initModule` rather than a stand-in built directly in the test. This
+    avoids driving the raw HTTP/session-manager transport at all — v1's
+    `streamable_http_client` yielded a 3-tuple `(read_stream, write_stream,
+    get_session_id)`; v2 narrowed that to 2, and the module's own lifespan
+    hooks are sufficient to exercise "engine client closed after session
+    manager teardown" without depending on that wire-level shape.
     """
-    import httpx
     from fastapi import FastAPI
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamable_http_client
+    from mcp.client import Client
 
     import ai.modules.mcp as mcp_module
 
@@ -207,6 +246,16 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
             close_events.append('closed')
 
     monkeypatch.setattr(mcp_module, 'make_engine_client', lambda cfg, on_event=None: FakeClosableEngine())
+
+    captured = {}
+    real_build_mcp_server = mcp_module.build_mcp_server
+
+    def _capturing_build_mcp_server(engine_factory, task_registry=None):
+        server = real_build_mcp_server(engine_factory, task_registry)
+        captured['server'] = server
+        return server
+
+    monkeypatch.setattr(mcp_module, 'build_mcp_server', _capturing_build_mcp_server)
 
     class FakeServer:
         def __init__(self):
@@ -227,29 +276,11 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
     for handler in srv.app.router.on_startup:
         await handler()
 
-    asgi_http_client = httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=srv.app),
-        base_url='http://testserver',
-        follow_redirects=True,
-    )
-
-    async with (
-        asgi_http_client,
-        streamable_http_client('http://testserver/mcp', http_client=asgi_http_client) as (
-            read_stream,
-            write_stream,
-            _get_session_id,
-        ),
-    ):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            # Reading a resource (unlike list_tools, which is purely
-            # registry-based and never touches the engine) routes through
-            # engine_factory(), lazily creating _state['client'] inside the
-            # initModule closure.
-            from mcp.types import AnyUrl
-
-            await session.read_resource(AnyUrl('rocketride://status'))
+    # Reading a resource (unlike list_tools, which is purely registry-based
+    # and never touches the engine) routes through engine_factory(), lazily
+    # creating _state['client'] inside the initModule closure.
+    async with Client(captured['server']) as client:
+        await client.read_resource('rocketride://status')
 
     assert close_events == []  # not yet — only shutdown closes it
 
