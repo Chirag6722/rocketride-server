@@ -17,7 +17,8 @@ const { execCommand, exists, mkdir, rm, setState, parallel, PROJECT_ROOT, BUILD_
 const DOC_GENERATORS = ['nodes:docs-generate', 'client-typescript:docs-generate'];
 
 const DOCS_DIR = path.join(__dirname, '..');
-const CONTENT_STATIC_DIR = path.join(DOCS_DIR, 'content-static');
+// Spine pages now live in the top-level docs/ tree (docs consolidation).
+const CONTENT_STATIC_DIR = path.join(PROJECT_ROOT, 'docs', 'product');
 const STATIC_DIR = path.join(DOCS_DIR, 'static');
 
 // Assembled content tree Docusaurus reads (gather populates it).
@@ -127,6 +128,31 @@ function makeTestAction() {
 	};
 }
 
+function makeExportAction() {
+	return {
+		description: 'Export docs-owned files to their package destinations',
+		run: async (ctx, task) => {
+			const { exportDocs } = require('./lib/export');
+			const { written } = await exportDocs({ projectRoot: PROJECT_ROOT, task });
+			task.output = `Exported ${written.length} files`;
+		}
+	};
+}
+
+function makeCheckAction() {
+	return {
+		description: 'Verify exported docs copies are in sync',
+		run: async (ctx, task) => {
+			const { exportDocs } = require('./lib/export');
+			const { drifted } = await exportDocs({ projectRoot: PROJECT_ROOT, check: true, task });
+			if (drifted.length) {
+				throw new Error(`docs:check: exported copies are out of sync:\n${drifted.map((d) => `  ${d}`).join('\n')}\nRun './builder docs:export' to refresh them.`);
+			}
+			task.output = 'Docs exports in sync';
+		}
+	};
+}
+
 function makeCleanAction() {
 	return {
 		description: 'Clean docs',
@@ -185,6 +211,14 @@ module.exports = {
 		{
 			name: 'docs:test',
 			action: makeTestAction
+		},
+		{
+			name: 'docs:export',
+			action: makeExportAction
+		},
+		{
+			name: 'docs:check',
+			action: makeCheckAction
 		},
 		{
 			name: 'docs:clean',
