@@ -9,7 +9,7 @@ from starlette.routing import Mount
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 from .engine import make_engine_client
-from .handlers import build_mcp_server, make_flow_dispatcher
+from .handlers import build_mcp_server
 from .registry import TaskRegistry
 
 _MOUNT_PATH = '/mcp'
@@ -31,14 +31,11 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
             - ``mcp_dev_no_auth`` (bool): skip auth for ``/mcp`` in dev.
     """
     # ------------------------------------------------------------------
-    # 1. Hoisted TaskRegistry + flow-event dispatcher
-    # Created before the engine factory so the dispatcher can be threaded
-    # through as `on_event` on first (lazy) engine-client construction, and
-    # the same registry instance is handed to build_mcp_server below —
-    # tools and the dispatcher must share one registry.
+    # 1. Hoisted TaskRegistry
+    # Created before the engine factory so the same registry instance is
+    # handed to build_mcp_server below.
     # ------------------------------------------------------------------
     task_registry = TaskRegistry()
-    dispatcher = make_flow_dispatcher(task_registry)
 
     # ------------------------------------------------------------------
     # 2. Lazy-singleton engine factory
@@ -49,7 +46,7 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
 
     def engine_factory() -> Any:
         if _state['client'] is None:
-            _state['client'] = make_engine_client(config, on_event=dispatcher)
+            _state['client'] = make_engine_client(config)
         return _state['client']
 
     # ------------------------------------------------------------------

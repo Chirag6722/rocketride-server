@@ -11,7 +11,7 @@ import json
 import logging
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Callable, Optional
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
@@ -47,38 +47,6 @@ except PackageNotFoundError:
     _SERVER_VERSION = '0.0.0'
 
 
-def make_flow_dispatcher(tasks: TaskRegistry) -> Callable[[Dict[str, Any]], Awaitable[None]]:
-    """Build the client `on_event` callback that buffers per-node trace events.
-
-    The engine pushes ``apaevt_flow`` events for any task subscribed via
-    ``add_monitor({'token': ...}, ['flow'])``. Each delivered event carries the
-    task's short id at ``body.__id`` (injected by the DAP layer), which maps to
-    a registry token. We route the trace payload into that token's ring buffer
-    so a pull-based `get_pipeline_trace` tool can drain it later. Non-flow
-    events and events with no ``__id`` are ignored.
-    """
-
-    async def _on_event(message: Dict[str, Any]) -> None:
-        if (message or {}).get('event') != 'apaevt_flow':
-            return
-        body = message.get('body') or {}
-        flow_id = body.get('__id')
-        if flow_id is None:
-            return
-        tasks.record_flow(
-            flow_id,
-            {
-                'pipe': body.get('id'),
-                'op': body.get('op'),
-                'pipes': body.get('pipes'),
-                'trace': body.get('trace'),
-                'source': body.get('source'),
-            },
-        )
-
-    return _on_event
-
-
 def build_mcp_server(
     engine_factory: Callable[[], EngineClient],
     task_registry: Optional[TaskRegistry] = None,
@@ -97,10 +65,9 @@ def build_mcp_server(
             underlying `RocketRideClient` WS connection — the client's connect lock
             only guards the one-time `connect()` race, it does not serialize or
             correlate concurrent in-flight requests on that connection.
-        task_registry: Optional pre-built `TaskRegistry` (e.g. one already wired
-            to a flow-event dispatcher via `make_flow_dispatcher`). When omitted,
-            a fresh registry is created here (back-compat for callers/tests that
-            don't need flow-event buffering).
+        task_registry: Optional pre-built `TaskRegistry`. When omitted, a fresh
+            registry is created here (back-compat for callers/tests that don't
+            need a pre-populated one).
         registry: Optional pre-built `ToolRegistry`. Keyword-only test seam --
             production callers never pass this; when omitted (the normal case),
             a fresh registry is built here via `tools.register_all`.

@@ -46,7 +46,30 @@ class EngineClient(Protocol):
     async def deploy_update(
         self, project_id: str, pipeline: Optional[dict] = None, schedule: Optional[str] = None
     ) -> None: ...
-    async def add_monitor(self, key: Dict[str, Any], types: List[str]) -> None: ...
+    async def log_chapters(self, project_id: str, source: str, run_kind: str = 'dev') -> Dict[str, Any]: ...
+    async def log_read(
+        self,
+        project_id: str,
+        source: str,
+        run_kind: str = 'dev',
+        *,
+        from_seq: Optional[int] = None,
+        cursor: Optional[int] = None,
+        max_events: Optional[int] = None,
+        types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]: ...
+    async def log_traces(
+        self,
+        project_id: str,
+        source: str,
+        run_kind: str = 'dev',
+        *,
+        n: int = 20,
+        chapter_begin_seq: Optional[int] = None,
+    ) -> Dict[str, Any]: ...
+    async def log_trace(
+        self, project_id: str, source: str, run_kind: str = 'dev', *, begin_seq: int = 0
+    ) -> Dict[str, Any]: ...
 
 
 class WsEngineClient:
@@ -61,10 +84,10 @@ class WsEngineClient:
     to open the socket twice.
     """
 
-    def __init__(self, uri: str, auth: str, on_event: Optional[Any] = None) -> None:
+    def __init__(self, uri: str, auth: str) -> None:
         from rocketride import RocketRideClient  # deferred import; SDK on the engine env
 
-        self._client = RocketRideClient(uri=uri, auth=auth, on_event=on_event)
+        self._client = RocketRideClient(uri=uri, auth=auth)
         self._uri = uri
         self._connected = False
         self._connect_lock = asyncio.Lock()
@@ -194,16 +217,99 @@ class WsEngineClient:
         await self._ensure_connected()
         await self._client.deploy.update(project_id, pipeline=pipeline, schedule=schedule)
 
-    async def add_monitor(self, key: Dict[str, Any], types: List[str]) -> None:
+    async def log_chapters(self, project_id: str, source: str, run_kind: str = 'dev') -> Dict[str, Any]:
         await self._ensure_connected()
-        await self._client.add_monitor(key, types)
+        return await self._client.log.chapters(project_id, source, run_kind)
+
+    async def log_read(
+        self,
+        project_id: str,
+        source: str,
+        run_kind: str = 'dev',
+        *,
+        from_seq: Optional[int] = None,
+        cursor: Optional[int] = None,
+        max_events: Optional[int] = None,
+        types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        await self._ensure_connected()
+        return await self._client.log.read(
+            project_id,
+            source,
+            run_kind,
+            from_seq=from_seq,
+            cursor=cursor,
+            max_events=max_events,
+            types=types,
+        )
+
+    async def log_traces(
+        self,
+        project_id: str,
+        source: str,
+        run_kind: str = 'dev',
+        *,
+        n: int = 20,
+        chapter_begin_seq: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Return the SDK's raw trace-summary shape verbatim: ``{'open': [...], 'closed': [...]}``.
+
+        This seam is a faithful transport — it does not flatten or reshape the
+        SDK result. Callers (the ``log_traces`` MCP tool) are responsible for
+        picking the right list(s) out of the two buckets.
+
+        By default (``chapter_begin_seq=None``) the session seeks ``'live'``,
+        so traces come back for whatever is most recent. Passing
+        ``chapter_begin_seq`` instead addresses a specific past run: it looks
+        up that chapter via ``log.chapters()`` (matching its ``beginSeq``),
+        then seeks to that chapter's ``endTime`` (or ``'live'`` if the
+        chapter has no ``endTime`` — i.e. it is still open) before reading
+        traces, so the result reflects that run's activity rather than the
+        latest one. No matching chapter raises ``KeyError(chapter_begin_seq)``
+        — callers (the ``log_traces`` MCP tool) map that to a structured
+        not-found result the same way ``log_trace`` already maps an expired
+        ``beginSeq``.
+        """
+        await self._ensure_connected()
+        session = self._client.log.open_event_stream(project_id, source, run_kind)
+        try:
+            if chapter_begin_seq is None:
+                await session.seek('live')
+            else:
+                chapters_result = await self._client.log.chapters(project_id, source, run_kind)
+                chapters = (chapters_result or {}).get('chapters') or []
+                chapter = next((c for c in chapters if c.get('beginSeq') == chapter_begin_seq), None)
+                if chapter is None:
+                    raise KeyError(chapter_begin_seq)
+                end_time = chapter.get('endTime')
+                await session.seek('live' if end_time is None else end_time)
+            return await session.get_traces(n)
+        finally:
+            session.close_event_stream()
+
+    async def log_trace(
+        self, project_id: str, source: str, run_kind: str = 'dev', *, begin_seq: int = 0
+    ) -> Dict[str, Any]:
+        """Return the SDK's raw trace-detail shape verbatim: ``{'summary': {...}, 'events': [...]}``.
+
+        This seam is a faithful transport — it does not unwrap ``events`` out
+        of the result. Callers (the ``log_trace`` MCP tool) are responsible
+        for picking the fields they need out of the dict.
+        """
+        await self._ensure_connected()
+        session = self._client.log.open_event_stream(project_id, source, run_kind)
+        try:
+            await session.seek('live')
+            return await session.get_trace(begin_seq)
+        finally:
+            session.close_event_stream()
 
 
-def make_engine_client(config: Dict[str, Any], on_event: Optional[Any] = None) -> EngineClient:
+def make_engine_client(config: Dict[str, Any]) -> EngineClient:
     uri = os.environ.get('ROCKETRIDE_URI') or ''
     auth = os.environ.get('ROCKETRIDE_AUTH') or os.environ.get('ROCKETRIDE_APIKEY') or ''
     if not uri:
         raise ValueError('Missing required environment variable: ROCKETRIDE_URI')
     if not auth:
         raise ValueError('Missing required environment variable: ROCKETRIDE_AUTH or ROCKETRIDE_APIKEY')
-    return WsEngineClient(uri=uri, auth=auth, on_event=on_event)
+    return WsEngineClient(uri=uri, auth=auth)

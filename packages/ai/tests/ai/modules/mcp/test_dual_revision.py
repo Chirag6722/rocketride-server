@@ -215,7 +215,7 @@ async def test_modern_client_can_list_tools_through_the_real_mount(monkeypatch, 
         body = _first_jsonrpc_payload(resp)
         assert 'result' in body, body
         result = body['result']
-        assert len(result['tools']) == 23
+        assert len(result['tools']) == 26
         # python-side snake_case fields are ttl_ms/cache_scope; the wire keeps
         # the camelCase aliases (sdk-api-notes.md §3) -- this is the only test
         # in the module that goes through JSON serialization to see them.

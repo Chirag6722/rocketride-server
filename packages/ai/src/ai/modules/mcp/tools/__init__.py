@@ -16,6 +16,7 @@ from ..tooling import ToolRegistry
 from . import capability
 from . import execution
 from . import introspection
+from . import logs
 from . import visibility
 
 
@@ -27,10 +28,12 @@ def register_all(registry: ToolRegistry) -> None:
     (`run_pipeline`, `send_data`, `terminate`, `send_files`), the capability
     tools (`store_read`, `store_list`, `store_stat`, `store_get_url`,
     `save_template`, `load_template`, `deploy_add`, `deploy_list`,
-    `deploy_status`, `deploy_remove`, `deploy_update`), and the visibility
-    tools (`monitor`, `list_running_pipelines`, `get_pipeline_trace`).
+    `deploy_status`, `deploy_remove`, `deploy_update`), the visibility tools
+    (`monitor`, `list_running_pipelines`), and the DVR run-log tools
+    (`log_chapters`, `log_read`, `log_traces`, `log_trace`).
     """
     introspection.register(registry)
     execution.register(registry)
     capability.register(registry)
     visibility.register(registry)
+    logs.register(registry)

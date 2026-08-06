@@ -1,5 +1,5 @@
 # Copyright 2026 Aparavi Software AG. MIT License.
-"""Visibility tools: `monitor`, `list_running_pipelines`, `get_pipeline_trace`.
+"""Visibility tools: `monitor`, `list_running_pipelines`.
 
 **REDESIGNED from the original event-streaming design.** The design (see
 tool-specs.md Visibility section) originally specified `monitor` as
@@ -156,61 +156,8 @@ async def _list_running_pipelines(client, tasks, args: Dict[str, Any]) -> dict:
     return {'ok': True, 'tasks': running, 'count': len(running)}
 
 
-_GET_PIPELINE_TRACE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'task_token': {
-            'type': 'string',
-            'description': 'Task token (from run_pipeline, or an external tk_ token to adopt)',
-        },
-        'since': {'type': 'integer', 'description': 'Cursor from a prior call (default 0 = all buffered)'},
-    },
-    'required': ['task_token'],
-}
-
-
-async def _get_pipeline_trace(client, tasks, args: Dict[str, Any]) -> dict:
-    token = args.get('task_token')
-    if not token:
-        return _bad('task_token is required', 'pass the token from run_pipeline, or an external task token to adopt')
-    since = int(args.get('since') or 0)
-
-    just_subscribed = False
-    if not tasks.is_flow_subscribed(token):
-        tasks.ensure_flow(token)
-        try:
-            await asyncio.wait_for(
-                client.add_monitor({'token': token}, ['flow']),
-                timeout=DEFAULT_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            return {
-                'ok': False,
-                'error_type': 'Timeout',
-                'message': 'timed out subscribing to flow events for this task',
-                'hint': 'the engine connection may be busy or wedged; retry get_pipeline_trace',
-            }
-        tasks.mark_flow_subscribed(token)
-        just_subscribed = True
-
-    res = tasks.flow_since(token, since)
-    payload = {
-        'ok': True,
-        'task_token': token,
-        'events': res['events'],
-        'cursor': res['cursor'],
-        'count': len(res['events']),
-    }
-    if just_subscribed:
-        payload['note'] = (
-            'subscription just started -- events fired before this call were not captured. '
-            'The task must be running with pipelineTraceLevel (use "full"); send work, then call again with since=cursor.'
-        )
-    return payload
-
-
 def register(registry: ToolRegistry) -> None:
-    """Register the visibility tools (`monitor`, `list_running_pipelines`, `get_pipeline_trace`) against ``registry``."""
+    """Register the visibility tools (`monitor`, `list_running_pipelines`) against ``registry``."""
     registry.register(
         'monitor',
         'Poll a running pipeline task (by task_token) until it reaches a terminal state or the '
@@ -225,12 +172,3 @@ def register(registry: ToolRegistry) -> None:
         {'type': 'object', 'properties': {}},
         ui_resource_uri=PIPELINES_TABLE_URI,
     )(_list_running_pipelines)
-    registry.register(
-        'get_pipeline_trace',
-        'Drain the per-node trace stream for a task (by task_token): component enter/leave plus '
-        'per-node trace.error/trace.data -- the granular detail monitor cannot see. Requires the task '
-        'to run with pipelineTraceLevel (use "full"). Auto-subscribes on first call for a token: for '
-        'externally-started tasks call once BEFORE sending work, then drain. Pass since (the prior '
-        'cursor) to page incrementally.',
-        _GET_PIPELINE_TRACE_SCHEMA,
-    )(_get_pipeline_trace)

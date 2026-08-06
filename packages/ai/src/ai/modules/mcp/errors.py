@@ -41,6 +41,23 @@ def _bad(message: str, hint: str) -> dict:
     }
 
 
+def _timeout(message: str, hint: str) -> dict:
+    """Build a structured, self-correctable timeout result for a tool handler.
+
+    Every blocking seam call in this module is wrapped in
+    ``asyncio.wait_for(..., timeout=...)`` since neither the SDK's `use()`/
+    `send()` nor the `rrext_log` calls have a wall-clock timeout of their
+    own. A bare ``asyncio.TimeoutError`` is caught locally rather than left
+    to propagate to ``normalize_error``: that function treats the
+    `TimeoutError` type name as a hard, non-self-correctable failure
+    (``HARD_EXC_NAMES``) and raises ``HardError``, which surfaces as an MCP
+    tool error -- appropriate for a lost connection, but not for "this one
+    call happened to run long." Deliberately uses ``error_type: 'Timeout'``
+    (not ``'TimeoutError'``) so it never collides with ``HARD_EXC_NAMES``.
+    """
+    return {'ok': False, 'error_type': 'Timeout', 'message': message, 'hint': hint}
+
+
 def _extract_dap_failure(exc: Exception) -> Optional[str]:
     """Pull the failure message out of an attached DAP result, if any.
 

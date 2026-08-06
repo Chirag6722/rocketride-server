@@ -43,12 +43,12 @@ def test_visibility_register_binds_handler_directly():
     assert registry.handler('monitor') is not None
 
 
-def test_register_all_yields_twenty_three_tools_total():
+def test_register_all_yields_twenty_six_tools_total():
     registry = ToolRegistry()
 
     register_all(registry)
 
-    assert len(registry.names()) == 23
+    assert len(registry.names()) == 26
 
 
 # --- monitor -------------------------------------------------------------
@@ -258,115 +258,3 @@ def test_list_running_pipelines_registered():
     visibility.register(registry)
 
     assert 'list_running_pipelines' in set(registry.names())
-
-
-# --- get_pipeline_trace ---------------------------------------------------
-
-
-def test_get_pipeline_trace_registered():
-    registry = ToolRegistry()
-
-    visibility.register(registry)
-
-    assert 'get_pipeline_trace' in set(registry.names())
-
-
-@pytest.mark.asyncio
-async def test_get_pipeline_trace_requires_task_token(fake_engine):
-    registry = ToolRegistry()
-    visibility.register(registry)
-
-    result = await registry.handler('get_pipeline_trace')(fake_engine, None, {})
-
-    assert result['ok'] is False
-    assert result['error_type'] == 'BadRequest'
-    assert fake_engine.add_monitor_calls == []
-
-
-@pytest.mark.asyncio
-async def test_get_pipeline_trace_subscribes_on_first_call(fake_engine):
-    registry = ToolRegistry()
-    visibility.register(registry)
-    tasks = TaskRegistry()
-
-    result = await registry.handler('get_pipeline_trace')(fake_engine, tasks, {'task_token': 'tok-1'})
-
-    assert result['ok'] is True
-    assert result['task_token'] == 'tok-1'
-    assert result['events'] == []
-    assert result['count'] == 0
-    assert 'note' in result
-    assert fake_engine.add_monitor_calls == [({'token': 'tok-1'}, ['flow'])]
-    assert tasks.is_flow_subscribed('tok-1') is True
-
-
-@pytest.mark.asyncio
-async def test_get_pipeline_trace_no_resubscribe_when_already_subscribed(fake_engine):
-    registry = ToolRegistry()
-    visibility.register(registry)
-    tasks = TaskRegistry()
-    tasks.mark_flow_subscribed('tok-1')
-
-    result = await registry.handler('get_pipeline_trace')(fake_engine, tasks, {'task_token': 'tok-1'})
-
-    assert result['ok'] is True
-    assert 'note' not in result
-    assert fake_engine.add_monitor_calls == []
-
-
-@pytest.mark.asyncio
-async def test_get_pipeline_trace_drains_buffered_events_with_cursor_paging(fake_engine):
-    registry = ToolRegistry()
-    visibility.register(registry)
-    tasks = TaskRegistry()
-    tasks.set_flow_id('tok-1', 'flow-123')
-    tasks.record_flow('flow-123', {'pipe': 'pipe-1', 'op': 'start'})
-    tasks.record_flow('flow-123', {'pipe': 'pipe-1', 'op': 'end'})
-
-    first = await registry.handler('get_pipeline_trace')(fake_engine, tasks, {'task_token': 'tok-1'})
-
-    assert first['ok'] is True
-    assert first['count'] == 2
-    assert len(first['events']) == 2
-
-    second = await registry.handler('get_pipeline_trace')(
-        fake_engine, tasks, {'task_token': 'tok-1', 'since': first['cursor']}
-    )
-
-    assert second['ok'] is True
-    assert second['count'] == 0
-    assert second['events'] == []
-
-
-@pytest.mark.asyncio
-async def test_get_pipeline_trace_add_monitor_failure_propagates(fake_engine, monkeypatch):
-    async def _boom(key, types):
-        raise RuntimeError('subscribe failed')
-
-    monkeypatch.setattr(fake_engine, 'add_monitor', _boom)
-
-    registry = ToolRegistry()
-    visibility.register(registry)
-    tasks = TaskRegistry()
-
-    with pytest.raises(RuntimeError, match='subscribe failed'):
-        await registry.handler('get_pipeline_trace')(fake_engine, tasks, {'task_token': 'tok-1'})
-
-
-@pytest.mark.asyncio
-async def test_get_pipeline_trace_subscribe_timeout_returns_timeout(fake_engine, monkeypatch):
-    registry = ToolRegistry()
-    visibility.register(registry)
-    tasks = TaskRegistry()
-
-    async def _hang(*args, **kwargs):
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(fake_engine, 'add_monitor', _hang)
-    monkeypatch.setattr(visibility, 'DEFAULT_TIMEOUT_SECONDS', 0.01)
-
-    result = await registry.handler('get_pipeline_trace')(fake_engine, tasks, {'task_token': 'tok-1'})
-
-    assert result['ok'] is False
-    assert result['error_type'] == 'Timeout'
-    assert tasks.is_flow_subscribed('tok-1') is False

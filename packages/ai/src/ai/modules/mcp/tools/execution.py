@@ -30,7 +30,7 @@ import asyncio
 from typing import Any, Dict
 
 from ..apps import DROPPER_URI
-from ..errors import _bad
+from ..errors import _bad, _timeout
 from ..tooling import ToolRegistry
 
 # Default wall-clock budget for a single blocking `use`/`send`/`terminate`/
@@ -53,9 +53,7 @@ _RUN_PIPELINE_SCHEMA = {
         'pipelineTraceLevel': {
             'type': 'string',
             'enum': ['none', 'metadata', 'summary', 'full'],
-            'description': (
-                'Capture the per-node trace stream at this detail level; drain it with get_pipeline_trace (use "full")'
-            ),
+            'description': 'Capture the per-node trace stream at this detail level (default "summary" — required for log_traces/log_trace to have content; pass "none" to disable)',
         },
     },
     'anyOf': [{'required': ['pipeline']}, {'required': ['filepath']}],
@@ -73,9 +71,7 @@ _RUN_DROPPER_PIPE_SCHEMA = {
         'pipelineTraceLevel': {
             'type': 'string',
             'enum': ['none', 'metadata', 'summary', 'full'],
-            'description': (
-                'Capture the per-node trace stream at this detail level; drain it with get_pipeline_trace (use "full")'
-            ),
+            'description': 'Capture the per-node trace stream at this detail level (default "summary" — required for log_traces/log_trace to have content; pass "none" to disable)',
         },
     },
     'anyOf': [{'required': ['pipeline']}, {'required': ['filepath']}],
@@ -113,15 +109,6 @@ _SEND_FILES_SCHEMA = {
 }
 
 
-def _timeout(message: str, hint: str) -> dict:
-    """Build a structured, self-correctable timeout result.
-
-    Deliberately uses `error_type: 'Timeout'` (not `'TimeoutError'`) so it
-    never collides with `errors.HARD_EXC_NAMES` -- see the module docstring.
-    """
-    return {'ok': False, 'error_type': 'Timeout', 'message': message, 'hint': hint}
-
-
 async def _run_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
     pipeline = args.get('pipeline')
     filepath = args.get('filepath')
@@ -132,6 +119,8 @@ async def _run_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
     for key in _OPTIONAL_USE_KWARGS:
         if args.get(key) is not None:
             kwargs[key] = args[key]
+
+    kwargs.setdefault('pipelineTraceLevel', 'summary')
 
     try:
         started = await asyncio.wait_for(client.use(**kwargs), timeout=DEFAULT_TIMEOUT_SECONDS)
@@ -150,19 +139,8 @@ async def _run_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
     tasks.add(token, pipeline_ref=filepath or '<inline>')
 
     result_payload: Dict[str, Any] = {'ok': True, 'task_token': token}
-
-    if args.get('pipelineTraceLevel') not in (None, 'none'):
-        tasks.set_flow_id(token, (started or {}).get('id'))
-        try:
-            await asyncio.wait_for(
-                client.add_monitor({'token': token}, ['flow']),
-                timeout=DEFAULT_TIMEOUT_SECONDS,
-            )
-            tasks.mark_flow_subscribed(token)
-            result_payload['flow_subscribed'] = True
-        except Exception as exc:  # noqa: BLE001 - pipeline started; subscription is best-effort
-            result_payload['flow_subscribed'] = False
-            result_payload['flow_warning'] = str(exc)
+    result_payload['projectId'] = (started or {}).get('projectId')
+    result_payload['source'] = (started or {}).get('source')
 
     inputs = args.get('inputs')
     if inputs is not None:
@@ -204,6 +182,8 @@ async def _run_dropper_pipe(client, tasks, args: Dict[str, Any]) -> dict:
         if args.get(key) is not None:
             kwargs[key] = args[key]
 
+    kwargs.setdefault('pipelineTraceLevel', 'summary')
+
     try:
         started = await asyncio.wait_for(client.use(**kwargs), timeout=DEFAULT_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
@@ -227,20 +207,9 @@ async def _run_dropper_pipe(client, tasks, args: Dict[str, Any]) -> dict:
         'task_token': token,
         'upload_url': f'{client.base_url}/task/data?token={token}&auth={public_token}',
         'dropper_url': f'{client.base_url}/dropper?auth={public_token}',
+        'projectId': started.get('projectId'),
+        'source': started.get('source'),
     }
-
-    if args.get('pipelineTraceLevel') not in (None, 'none'):
-        tasks.set_flow_id(token, started.get('id'))
-        try:
-            await asyncio.wait_for(
-                client.add_monitor({'token': token}, ['flow']),
-                timeout=DEFAULT_TIMEOUT_SECONDS,
-            )
-            tasks.mark_flow_subscribed(token)
-            result_payload['flow_subscribed'] = True
-        except Exception as exc:  # noqa: BLE001 - pipeline started; subscription is best-effort
-            result_payload['flow_subscribed'] = False
-            result_payload['flow_warning'] = str(exc)
 
     return result_payload
 
@@ -312,7 +281,8 @@ def register(registry: ToolRegistry) -> None:
     registry.register(
         'run_pipeline',
         'Start a RocketRide pipeline from an inline definition or filepath, returning a task_token. '
-        'Pass inputs to also send data immediately and get a result back in the same call.',
+        'Pass inputs to also send data immediately and get a result back in the same call. '
+        'Result includes projectId and source for use with log_traces/log_trace.',
         _RUN_PIPELINE_SCHEMA,
     )(_run_pipeline)
 
@@ -321,7 +291,8 @@ def register(registry: ToolRegistry) -> None:
         'Start a RocketRide pipeline and return two self-contained URLs for getting files in over a '
         'separate HTTP data channel (file bytes cannot ride the MCP tool call): upload_url for a '
         'programmatic multipart POST, and dropper_url for a human to drag-drop files in a browser. '
-        'Same inputs as run_pipeline, minus the inline-send path.',
+        'Same inputs as run_pipeline, minus the inline-send path. '
+        'Result includes projectId and source for use with log_traces/log_trace.',
         _RUN_DROPPER_PIPE_SCHEMA,
         ui_resource_uri=DROPPER_URI,
     )(_run_dropper_pipe)

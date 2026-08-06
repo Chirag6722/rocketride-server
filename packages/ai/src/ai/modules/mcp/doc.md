@@ -11,7 +11,7 @@ like every other module and mounted at:
 /mcp
 ```
 
-This module exposes a static, 23-tool RocketRide authoring/execution surface served
+This module exposes a static, 26-tool RocketRide authoring/execution surface served
 over HTTP from inside the running engine process — no separate process or transport
 bridge required. It supersedes the earlier 2-tool port, which exposed a dynamic
 per-pipeline `{filepath}` tool plus a `RocketRide_Document_Processor` convenience
@@ -103,7 +103,7 @@ on every `CacheableResult` this module returns:
 Config key `mcp_dev_no_auth` (bool, in the module `config` dict passed to `initModule`)
 is the config-driven equivalent of `MCP_DEV_NO_AUTH=1`; either one enables the bypass.
 
-## The 23 tools
+## The 26 tools
 
 Dispatch is registry-based: `tooling.ToolRegistry` holds `{name -> (description,
 inputSchema, handler)}`; `tools/__init__.register_all(registry)` populates one shared
@@ -119,10 +119,10 @@ All tools are static and typed (fixed name + JSON Schema) — there is no dynami
 per-pipeline tool generation and no `filepath`-shaped catch-all tool of the kind the
 legacy 2-tool port used.
 
-The 23 tools are organized into 7 groups (plus 2 resources), matching
+The 26 tools are organized into 8 groups (plus 2 resources), matching
 `claude/tasks/http-mcp-tools-port/final-tool-surface.md` minus the Query group
 (see History: the 3 convenience query tools were removed pending their cloud DB
-backend).
+backend), plus the Run log (DVR) group added below.
 
 **Introspection (4)** — `tools/introspection.py`, read-only/static-analysis, no task tokens:
 
@@ -148,13 +148,12 @@ backend).
 | --- | --- | --- |
 | `send_files` | Upload one or more store-relative file paths to a running task by `task_token`. | `task_token`, `files` |
 
-**Visibility (3)** — `tools/visibility.py`:
+**Visibility (2)** — `tools/visibility.py`:
 
 | Tool | Purpose | Key args |
 | --- | --- | --- |
 | `monitor` | Bounded poll of task status until a terminal state or `timeout` elapses, returning a snapshot. | `task_token`, `timeout` (default 30), `interval` (default 1) |
 | `list_running_pipelines` | Server-authoritative list of running tasks (task token, name, state) — thin wrapper over the same `client.list_tasks()` seam backing the `rocketride://status` resource. Makes tokens discoverable for `monitor`/`send_data`/`terminate` without having started the task yourself in this session. | none |
-| `get_pipeline_trace` | Drain the per-node trace stream (component enter/leave, `trace.error`/`trace.data`) for a task that ran with `pipelineTraceLevel` — the granular per-node detail `monitor` cannot see. Auto-subscribes on first call for a token; page forward with `since`. See "Per-node tracing" below. | `task_token`, `since` (cursor, default 0) |
 
 **Store (4)** — `tools/capability.py`, read-only, SDK: `rocketride.mixins.store`:
 
@@ -182,51 +181,44 @@ backend).
 | `deploy_remove` | Undeploy and remove a deployment by `project_id`. | `project_id` |
 | `deploy_update` | Update a deployment's pipeline and/or schedule by `project_id`. | `project_id`, `pipeline`/`filepath`, `schedule` |
 
-### Per-node tracing
+**Run log (DVR) (4)** — `tools/logs.py`, read-only, keyed by `projectId`/`source`
+(never task tokens), backed by the engine's persisted continuum (`rrext_log`) —
+works for both past and live runs:
 
-`get_pipeline_trace` drains node-level component flow (op, lane, input/output,
-result, error — the `apaevt_flow`/FLOW events the engine pushes over the
-subscribing WS connection) for a task, complementing `monitor`'s task-level
-state/counts with per-node detail. The pieces:
+| Tool | Purpose | Key args |
+| --- | --- | --- |
+| `log_chapters` | List recorded runs (chapters) for a pipeline — begin/end times, `beginSeq`, outcome. | `projectId`, `source`, `runKind` (default `dev`) |
+| `log_read` | Read raw run-log events, cursor-paged; `types=["output"]` returns console lines only. Pass `nextCursor` back as `cursor` to continue. | `projectId`, `source`, `fromSeq`, `cursor`, `maxEvents` (floored at 1, capped at 200), `types` |
+| `log_traces` | List per-object trace summaries (one per file/document that traveled the pipeline). Each carries `beginSeq` — the permanent trace id. Returns `{traces, open}` — `traces` holds finished runs, `open` holds ones still in flight. Defaults to the latest/live run; pass `chapterBeginSeq` (from `log_chapters`) to address a specific past run instead. | `projectId`, `source`, `n` (default 20, clamped 1-100), `chapterBeginSeq` |
+| `log_trace` | Fetch one object's full begin-to-end journey through the pipeline by its `beginSeq`: a summary plus every component enter/leave with lane data, plus node narration. Returns `{beginSeq, summary, events}`. | `projectId`, `source`, `beginSeq` |
 
-- **`pipelineTraceLevel` gating.** Tracing only happens for tasks started with
-  `pipelineTraceLevel` set to something other than `'none'` (use `'full'`) on
-  `run_pipeline`/`run_dropper_pipe`, or passed directly to the SDK's `use()`
-  for an externally-started task. A task run without it produces no flow
-  events to drain, regardless of how many times `get_pipeline_trace` is
-  called on its token. Mechanically, the run tools gate on
-  `pipelineTraceLevel not in (None, 'none')` and skip the MCP-side flow
-  subscription entirely when it is `'none'` — so their result payload has no
-  `flow_subscribed` key at all in that case (as opposed to `false`, which
-  means a subscription was attempted and failed).
-- **Subscribe-at-start vs. auto-subscribe.** `run_pipeline`/`run_dropper_pipe`
-  flow-subscribe immediately (`client.add_monitor({'token': token}, ['flow'])`)
-  when `pipelineTraceLevel` is set, and the tool result carries
-  `flow_subscribed: true/false` (`false` plus a `flow_warning` if the
-  subscribe call itself failed — best-effort, since the pipeline already
-  started). `get_pipeline_trace` also auto-subscribes on a token's first call
-  if it isn't already subscribed — this is what makes it work for **adopted**
-  tasks (started outside this MCP session, e.g. directly via the SDK's
-  `use()`, so the server-owned `TaskRegistry` never saw them): call
-  `get_pipeline_trace(token)` once, before sending any work, to establish the
-  subscription, then send work, then call again to drain.
-- **Events-before-subscription are lost.** There is no server-side event
-  buffer prior to subscription — only events that arrive *after*
-  `add_monitor` is called are captured. The first call on a newly-subscribed
-  token returns whatever's already buffered (usually nothing yet) plus a
-  `note` explaining this; the caller is expected to send work and call again.
-- **Cursor paging.** Each buffered event carries a monotonic `seq`; a call
-  returns `{events, cursor, count}` where `cursor` is the highest `seq`
-  currently buffered. Pass that back as `since` on the next call to page
-  forward — `since=0` (the default) returns everything still buffered.
-- **Bounds.** Flow buffers are held in `registry.TaskRegistry`, keyed by
-  token, independent of task lifecycle (a one-shot task's registry entry is
-  removed by `run_pipeline`/`monitor` on completion, but its flow buffer stays
-  drainable). Bounded so a long-lived server process can't accumulate
-  unbounded memory: at most 32 distinct tokens tracked (oldest evicted,
-  FIFO, once a 33rd is seen) and at most 500 events per token (oldest
-  events dropped once the deque is full). Draining regularly (small `since`
-  steps) avoids ever hitting the per-token cap.
+Worst case, one `log_read` page is ≈ 200 × 64KB (`maxEvents` × per-event cap) of
+in-band JSON-RPC result — budget for that on a maxed-out page.
+
+Runs are keyed by `(projectId, source, runKind)`, addressed with the `projectId`/
+`source` that `run_pipeline`/`run_dropper_pipe` now return (see Execution above),
+not by task token — the run log outlives the task. Retention is 7 days (dev) / 30
+days (deploy), or earlier under segment/chapter caps. An unrecognized `projectId`/
+`source` pair (no chapters at all) returns `error_type: 'not_found'` from
+`log_chapters`; `log_traces` on an unrecognized `chapterBeginSeq` returns the same
+`'not_found'`; `log_trace` on an evicted `beginSeq` keeps its existing
+`error_type: 'trace_expired'`. Traces are gated by
+`pipelineTraceLevel` on the originating `run_pipeline`/`run_dropper_pipe` call
+(both tools now default it to `'summary'`): a run submitted with
+`pipelineTraceLevel: 'none'` still has chapters and console output, but
+`log_traces`/`log_trace` come back empty, with an explanatory `note`. The
+`EngineClient` seam (`log_traces`/`log_trace` on `WsEngineClient`) is a faithful
+transport that returns the SDK's raw nested shapes verbatim — the engine's
+`open`/`closed` trace-summary split and `summary`/`events` trace-detail split —
+with no reshaping; the `log_traces`/`log_trace` MCP tools do the normalizing
+described above. When `chapterBeginSeq` is passed, the seam looks the chapter
+up via `log.chapters()` and seeks the event-stream session to that chapter's
+`endTime` (or `'live'` if the chapter is still open) before reading traces, so
+results reflect that run rather than the latest one. All four `log_*` tool
+handlers wrap their blocking seam call in the same `asyncio.wait_for(...)` +
+in-band timeout envelope (`error_type: 'Timeout'`) used by the execution tools
+(`tools/execution.py`), rather than letting a slow engine surface as a hard MCP
+error.
 
 Tool call dispatch (`handlers._call_tool`) looks up the handler by name in the
 registry and calls `await handler(engine_client, task_registry, arguments)`. Errors
@@ -283,10 +275,10 @@ prompt templates from the earlier port were removed along with their tests.
 
 ## The `EngineClient` seam
 
-`engine.py` defines one `Protocol`, `EngineClient`, with the ~21 async methods needed
-by the 23-tool surface (task lifecycle, services/validation, store/templates/store
-metadata/signed URLs, full deployment lifecycle — see the `Protocol`
-definition in `engine.py` for exact signatures). All
+`engine.py` defines one `Protocol`, `EngineClient`, with the 26 methods needed
+by the 26-tool surface (task lifecycle, services/validation, store/templates/store
+metadata/signed URLs, full deployment lifecycle, `rrext_log` chapters/read/traces/
+trace — see the `Protocol` definition in `engine.py` for exact signatures). All
 tool/resource code depends only on this interface — never on a concrete client — so
 the implementation is swappable.
 
@@ -395,19 +387,29 @@ ingress work (16 → 17); the 3 `sql_query`/`graph_query`/`vector_search` query 
 followed (17 → 20); `set_env`/`list_env_keys` were then dropped as out of scope
 (20 → 18); and `store_stat`, `store_get_url`, `deploy_list`, `deploy_status`,
 `deploy_remove`, `deploy_update`, and `list_running_pipelines` were added to round
-out store/deployment/visibility lifecycles (18 → 25). `get_pipeline_trace` (25 → 26)
-followed, adding node-level `pipelineTraceLevel`/FLOW-event tracing — its
-mechanics (registry routing, dispatcher shape, subscribe-at-start, event
-fields) were ported from the `feature/mcp-server-overhaul` branch, which had
-already proven them live; see "Per-node tracing" above and
-`claude/tasks/http-mcp-tools-port/final-tool-surface.md` for the per-tool
-rationale.
+out store/deployment/visibility lifecycles (18 → 25). A per-node pipeline-trace
+visibility tool (25 → 26) followed, adding node-level `pipelineTraceLevel`/
+FLOW-event tracing — its mechanics (registry routing, dispatcher shape,
+subscribe-at-start, event fields) were ported from the
+`feature/mcp-server-overhaul` branch, which had already proven them live.
 
-Finally, the 3 `sql_query`/`graph_query`/`vector_search` convenience query tools
-were removed again (26 → 23): they target RocketRide-hosted SQL/graph/vector
+The 3 `sql_query`/`graph_query`/`vector_search` convenience query tools were
+then removed (26 → 23): they target RocketRide-hosted SQL/graph/vector
 databases whose backend is not yet available in OSS `develop`, so shipping them
 would expose tools that fail at call time. They are expected to return once the
 cloud DB backend lands.
+
+Then the per-node pipeline-trace visibility tool and its live-only
+in-memory event-buffer machinery (the `TaskRegistry` side-buffers, the
+dispatcher factory in `handlers.py`, and the engine-seam subscribe/event-hook
+wiring) were retired (23 → 22): the feature only ever worked for the life of
+one connection and one process, with nothing persisted. A DVR-style run log
+that persists per-project/source/run traces supersedes it in a follow-up
+change.
+
+**2026-08-06** — DVR run-log tools added (+4), `get_pipeline_trace` retired
+(−1): 23 → 26. Run tools now default `pipelineTraceLevel` to `'summary'` and
+return `projectId`/`source`.
 
 ## Running / testing locally
 

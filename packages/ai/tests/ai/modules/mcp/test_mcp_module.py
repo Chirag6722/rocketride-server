@@ -60,11 +60,14 @@ async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
             'deploy_update',
             'monitor',
             'list_running_pipelines',
-            'get_pipeline_trace',
+            'log_chapters',
+            'log_read',
+            'log_traces',
+            'log_trace',
         }
         # Order pin (see also test_cache_policy.py::test_list_tools_order_is_deterministic_and_pinned).
         assert names[0] == 'list_components'
-        assert names[-1] == 'get_pipeline_trace'
+        assert names[-1] == 'log_trace'
 
         call_result = await client.call_tool('list_running_pipelines', {})
         assert call_result.is_error is False
@@ -113,66 +116,6 @@ async def test_initmodule_mounts_mcp_route(monkeypatch, fake_engine):
 
 
 @pytest.mark.asyncio
-async def test_initmodule_wires_flow_dispatcher_through_engine_factory(monkeypatch, fake_engine):
-    """`initModule` must hoist a `TaskRegistry` + `make_flow_dispatcher(...)`
-    ahead of the lazy engine factory and thread the dispatcher through as
-    `make_engine_client(config, on_event=dispatcher)`, then hand the same
-    registry to `build_mcp_server`.
-    """
-    from fastapi import FastAPI
-    import ai.modules.mcp as mcp_module
-
-    captured_on_event = {}
-
-    def _fake_make_engine_client(cfg, on_event=None):
-        captured_on_event['on_event'] = on_event
-        return fake_engine
-
-    monkeypatch.setattr(mcp_module, 'make_engine_client', _fake_make_engine_client)
-
-    captured_build = {}
-    real_build_mcp_server = mcp_module.build_mcp_server
-
-    def _capturing_build_mcp_server(engine_factory, task_registry=None):
-        captured_build['engine_factory'] = engine_factory
-        captured_build['task_registry'] = task_registry
-        return real_build_mcp_server(engine_factory, task_registry)
-
-    monkeypatch.setattr(mcp_module, 'build_mcp_server', _capturing_build_mcp_server)
-
-    class FakeServer:
-        def __init__(self):
-            self.app = FastAPI()
-            self.public = set()
-
-        def add_route(self, path, handler, methods, public=False):
-            self.app.add_api_route(path, handler, methods=methods)
-            if public:
-                self.public.add(path)
-
-        def is_public_route(self, path):
-            return path in self.public
-
-    srv = FakeServer()
-    mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
-
-    assert captured_build['task_registry'] is not None
-
-    # Fire the lazy engine factory: make_engine_client must have received the
-    # dispatcher built from the *same* registry handed to build_mcp_server.
-    captured_build['engine_factory']()
-
-    dispatcher = captured_on_event.get('on_event')
-    assert dispatcher is not None and callable(dispatcher)
-
-    tasks = captured_build['task_registry']
-    tasks.set_flow_id('tok-x', 'flow-x')
-    await dispatcher({'event': 'apaevt_flow', 'body': {'__id': 'flow-x', 'id': 'pipe-x'}})
-
-    assert tasks.flow_since('tok-x')['events'][0]['pipe'] == 'pipe-x'
-
-
-@pytest.mark.asyncio
 async def test_shutdown_without_client_does_not_raise(monkeypatch, fake_engine):
     """No engine client was ever created (_state['client'] stays None) —
     shutdown must still drain the session manager cleanly without raising.
@@ -218,8 +161,7 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
 
     Drives the module through its real startup/shutdown lifespan hooks and
     the actual `mcp_server` object `initModule` builds internally (captured
-    via the `build_mcp_server` seam, same monkeypatch-and-capture pattern as
-    test_initmodule_wires_flow_dispatcher_through_engine_factory above), so
+    via the `build_mcp_server` seam), so
     `engine_factory()` fires through the real closure created inside
     `initModule` rather than a stand-in built directly in the test. This
     avoids driving the raw HTTP/session-manager transport at all — v1's

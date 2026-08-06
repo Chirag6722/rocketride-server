@@ -60,6 +60,11 @@ class FakeEngineClient:
         self.deploy_removed = []
         self.deploy_updated = []
         self.add_monitor_calls = []
+        self.log_chapters_result = {'chapters': [], 'horizonSeq': 0}
+        self.log_read_result = {'events': [], 'nextSeq': None}
+        self.log_traces_result = {'open': [], 'closed': []}
+        self.log_trace_result = {'summary': None, 'events': []}
+        self.log_calls = []
 
         # -- introspection (list_components / describe_component / validate) --
         self._services = (
@@ -124,7 +129,14 @@ class FakeEngineClient:
 
     async def use(self, **kwargs):
         self.used.append(kwargs)
-        return {'token': self._token, 'publicToken': self._public_token, 'id': 'abcd1234.websrc', **kwargs}
+        return {
+            'token': self._token,
+            'publicToken': self._public_token,
+            'id': 'abcd1234.websrc',
+            'projectId': 'proj-fake',
+            'source': 'src-fake',
+            **kwargs,
+        }
 
     async def terminate(self, token):
         self.terminated.append(token)
@@ -188,6 +200,28 @@ class FakeEngineClient:
 
     async def add_monitor(self, key, types):
         self.add_monitor_calls.append((key, types))
+
+    async def log_chapters(self, project_id, source, run_kind='dev'):
+        self.log_calls.append(('chapters', project_id, source, run_kind))
+        return self.log_chapters_result
+
+    async def log_read(
+        self, project_id, source, run_kind='dev', *, from_seq=None, cursor=None, max_events=None, types=None
+    ):
+        self.log_calls.append(('read', project_id, source, run_kind, from_seq, cursor, max_events, types))
+        return self.log_read_result
+
+    async def log_traces(self, project_id, source, run_kind='dev', *, n=20, chapter_begin_seq=None):
+        self.log_calls.append(('traces', project_id, source, run_kind, n, chapter_begin_seq))
+        if isinstance(self.log_traces_result, Exception):
+            raise self.log_traces_result
+        return self.log_traces_result
+
+    async def log_trace(self, project_id, source, run_kind='dev', *, begin_seq=0):
+        self.log_calls.append(('trace', project_id, source, run_kind, begin_seq))
+        if isinstance(self.log_trace_result, Exception):
+            raise self.log_trace_result
+        return self.log_trace_result
 
 
 @pytest.fixture

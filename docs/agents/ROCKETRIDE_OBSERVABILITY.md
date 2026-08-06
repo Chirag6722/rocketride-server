@@ -11,13 +11,26 @@ is not listed here, it likely does not exist in the server.
 ## 1. What RocketRide ships for observability
 
 RocketRide does **not** expose OpenTelemetry, Jaeger, Prometheus `/metrics`,
-Sentry, webhook registration, audit-log tables, or a queryable history database.
-There is no SQL store of past runs to read from.
+Sentry, webhook registration, or audit-log tables.
 
-Everything is delivered live over a single channel: a **WebSocket Debug Adapter
-Protocol (DAP) connection** on which the server emits typed events. To capture
-historical data, your service must connect, subscribe, and write the events to
-its own database as they arrive.
+The engine does persist a per-pipeline run-log continuum (PR #1661/#1678):
+each run is recorded keyed by `(projectId, source, runKind)` — chapters
+(begin/end/outcome), paged raw events, and per-object traces (`beginSeq`) all
+survive past the life of the task/connection, subject to a 7-day (dev) / 30-day
+(deploy) retention window. It is queryable via the `rrext_log` DAP command
+(subcommands `chapters`/`read`/`segment`/`delete`) or, more conveniently, the
+SDK's `client.log` surface (`client.log.chapters()`, `client.log.read()`,
+`client.log.segment()`, `client.log.delete()`); the MCP surface exposes the
+same continuum as `log_chapters`/`log_read`/`log_traces`/`log_trace` (see
+`packages/ai/src/ai/modules/mcp/doc.md`). This is not a general SQL store —
+there is no ad-hoc querying across runs — but it does mean past-run data no
+longer has to be captured live to be recovered later.
+
+Live delivery is still the primary channel for everything else: a **WebSocket
+Debug Adapter Protocol (DAP) connection** on which the server emits typed
+events. To capture data outside the run-log continuum (e.g. dashboard/SSE
+events), your service must connect, subscribe, and write the events to its own
+database as they arrive — the live monitoring guidance below remains valid.
 
 The features that _do_ exist:
 

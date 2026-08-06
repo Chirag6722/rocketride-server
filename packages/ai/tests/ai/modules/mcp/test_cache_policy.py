@@ -22,7 +22,7 @@ async def test_list_tools_order_is_deterministic_and_pinned(fake_engine):
     """Spec 2026-07-28 SHOULD: deterministic order for client/prompt caching.
 
     Pins the exact registration order from tools/__init__.register_all:
-    introspection, execution, capability, visibility.
+    introspection, execution, capability, visibility, logs.
     """
     from ai.modules.mcp.handlers import build_mcp_server
 
@@ -32,8 +32,8 @@ async def test_list_tools_order_is_deterministic_and_pinned(fake_engine):
         names_2 = [t.name for t in (await client.list_tools()).tools]
     assert names_1 == names_2
     assert names_1[:4] == ['list_components', 'describe_component', 'validate_pipeline', 'describe_pipeline']
-    assert names_1[-3:] == ['monitor', 'list_running_pipelines', 'get_pipeline_trace']
-    assert len(names_1) == 23
+    assert names_1[-4:] == ['log_chapters', 'log_read', 'log_traces', 'log_trace']
+    assert len(names_1) == 26
 
 
 @pytest.mark.asyncio

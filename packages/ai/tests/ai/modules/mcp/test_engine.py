@@ -52,6 +52,79 @@ class _FakeDeployApi:
         self.update_calls.append({'project_id': project_id, 'pipeline': pipeline, 'schedule': schedule})
 
 
+class _FakeEventSession:
+    """Stand-in for the event stream session returned by log.open_event_stream()."""
+
+    def __init__(self) -> None:
+        self.seek_calls = []
+        self.get_traces_calls = []
+        self.get_trace_calls = []
+        self.close_calls = 0
+        self._get_trace_raises = None
+
+    async def seek(self, position: str) -> None:
+        self.seek_calls.append(position)
+
+    async def get_traces(self, n: int) -> dict:
+        self.get_traces_calls.append(n)
+        return {'open': [{'seq': 1, 'kind': 'open-trace'}], 'closed': [{'seq': 2, 'kind': 'closed-trace'}]}
+
+    async def get_trace(self, begin_seq: int) -> dict:
+        self.get_trace_calls.append(begin_seq)
+        if self._get_trace_raises:
+            raise self._get_trace_raises
+        return {'summary': {'beginSeq': begin_seq}, 'events': [{'seq': begin_seq, 'kind': 'trace'}]}
+
+    def close_event_stream(self) -> None:
+        self.close_calls += 1
+
+
+class _FakeLogApi:
+    """Stand-in for RocketRideClient.log (cached_property sub-API)."""
+
+    def __init__(self) -> None:
+        self.chapters_calls = []
+        self.read_calls = []
+        self.open_event_stream_calls = []
+        self._session = _FakeEventSession()
+        # Scriptable: override with {'chapters': [...]} before calling
+        # log_traces(chapter_begin_seq=...) to control the lookup result.
+        self.chapters_result = None
+
+    async def chapters(self, project_id: str, source: str, run_kind: str) -> dict:
+        self.chapters_calls.append({'project_id': project_id, 'source': source, 'run_kind': run_kind})
+        if self.chapters_result is not None:
+            return self.chapters_result
+        return {'project_id': project_id, 'chapters': []}
+
+    async def read(
+        self,
+        project_id: str,
+        source: str,
+        run_kind: str,
+        from_seq: int = None,
+        cursor: int = None,
+        max_events: int = None,
+        types: list = None,
+    ) -> dict:
+        self.read_calls.append(
+            {
+                'project_id': project_id,
+                'source': source,
+                'run_kind': run_kind,
+                'from_seq': from_seq,
+                'cursor': cursor,
+                'max_events': max_events,
+                'types': types,
+            }
+        )
+        return {'project_id': project_id, 'events': []}
+
+    def open_event_stream(self, project_id: str, source: str, run_kind: str) -> _FakeEventSession:
+        self.open_event_stream_calls.append({'project_id': project_id, 'source': source, 'run_kind': run_kind})
+        return self._session
+
+
 class _FakeUnderlyingClient:
     """Stand-in for RocketRideClient that records lifecycle calls without any I/O."""
 
@@ -73,8 +146,8 @@ class _FakeUnderlyingClient:
         self.get_task_status_calls = []
         self.fs_stat_calls = []
         self.fs_get_url_calls = []
-        self.add_monitor_calls = []
         self.deploy = _FakeDeployApi()
+        self.log = _FakeLogApi()
 
     async def connect(self) -> None:
         self.connect_calls += 1
@@ -151,9 +224,6 @@ class _FakeUnderlyingClient:
     async def fs_get_url(self, path: str, expires_in: int = 3600, download_name: str = None) -> str:
         self.fs_get_url_calls.append({'path': path, 'expires_in': expires_in, 'download_name': download_name})
         return 'https://signed.example/f?sig=abc'
-
-    async def add_monitor(self, key: dict, types: list) -> None:
-        self.add_monitor_calls.append({'key': key, 'types': types})
 
 
 def _make_client_with_fake(monkeypatch):
@@ -457,57 +527,145 @@ def test_base_url_normalizes_scheme_and_strips_trailing_slash():
     assert WsEngineClient(uri='http://localhost:5565', auth='k').base_url == 'http://localhost:5565'
 
 
-def test_ctor_forwards_on_event_to_sdk_client(monkeypatch):
-    """WsEngineClient must forward `on_event` through to the RocketRideClient ctor."""
-    import ai.modules.mcp.engine as engine_module
-
-    captured_kwargs = {}
-
-    class _FakeRocketRideClient:
-        def __init__(self, **kwargs):
-            captured_kwargs.update(kwargs)
-
-    import rocketride
-
-    monkeypatch.setattr(rocketride, 'RocketRideClient', _FakeRocketRideClient)
-
-    def _on_event(event):  # pragma: no cover - identity/passthrough check only
-        pass
-
-    engine_module.WsEngineClient(uri='ws://localhost:5565', auth='test-auth', on_event=_on_event)
-
-    assert captured_kwargs.get('on_event') is _on_event
-
-
-async def test_add_monitor_calls_sdk_with_key_and_types(monkeypatch):
+async def test_log_chapters_calls_sdk_with_args(monkeypatch):
+    """log_chapters forwards project_id, source, run_kind and returns the SDK dict."""
     client, fake = _make_client_with_fake(monkeypatch)
 
-    result = await client.add_monitor({'token': 'tk-1'}, ['flow'])
+    result = await client.log_chapters('proj-1', 'source-a', 'prod')
 
-    assert fake.add_monitor_calls == [{'key': {'token': 'tk-1'}, 'types': ['flow']}]
-    assert result is None
+    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert result == {'project_id': 'proj-1', 'chapters': []}
 
 
-def test_make_engine_client_forwards_on_event(monkeypatch):
-    """make_engine_client must forward `on_event` through to WsEngineClient (and the SDK ctor)."""
-    from ai.modules.mcp.engine import make_engine_client
+async def test_log_chapters_defaults_run_kind_to_dev(monkeypatch):
+    client, fake = _make_client_with_fake(monkeypatch)
 
-    monkeypatch.setenv('ROCKETRIDE_URI', 'ws://localhost:5565')
-    monkeypatch.setenv('ROCKETRIDE_AUTH', 'k')
+    await client.log_chapters('proj-1', 'source-a')
 
-    captured_kwargs = {}
+    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'dev'}]
 
-    class _FakeRocketRideClient:
-        def __init__(self, **kwargs):
-            captured_kwargs.update(kwargs)
 
-    import rocketride
+async def test_log_read_forwards_keyword_args(monkeypatch):
+    """log_read forwards all keyword args through to the SDK."""
+    client, fake = _make_client_with_fake(monkeypatch)
 
-    monkeypatch.setattr(rocketride, 'RocketRideClient', _FakeRocketRideClient)
+    result = await client.log_read(
+        'proj-1', 'source-a', 'prod', from_seq=10, cursor=20, max_events=50, types=['task_start']
+    )
 
-    def _on_event(event):  # pragma: no cover - identity/passthrough check only
-        pass
+    assert fake.log.read_calls == [
+        {
+            'project_id': 'proj-1',
+            'source': 'source-a',
+            'run_kind': 'prod',
+            'from_seq': 10,
+            'cursor': 20,
+            'max_events': 50,
+            'types': ['task_start'],
+        }
+    ]
+    assert result == {'project_id': 'proj-1', 'events': []}
 
-    make_engine_client({}, on_event=_on_event)
 
-    assert captured_kwargs.get('on_event') is _on_event
+async def test_log_traces_seeks_live_calls_get_traces_closes_finally(monkeypatch):
+    """log_traces seeks 'live', calls get_traces(n), and ALWAYS closes the session.
+
+    The seam is a faithful transport: it returns the SDK's raw nested
+    ``{'open': [...], 'closed': [...]}`` shape verbatim, no flattening.
+    """
+    client, fake = _make_client_with_fake(monkeypatch)
+
+    result = await client.log_traces('proj-1', 'source-a', 'prod', n=10)
+
+    assert fake.log.open_event_stream_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log._session.seek_calls == ['live']
+    assert fake.log._session.get_traces_calls == [10]
+    assert fake.log._session.close_calls == 1
+    assert result == {'open': [{'seq': 1, 'kind': 'open-trace'}], 'closed': [{'seq': 2, 'kind': 'closed-trace'}]}
+
+
+async def test_log_traces_with_chapter_begin_seq_seeks_chapter_end_time(monkeypatch):
+    """Finding 1: chapter_begin_seq looks up the matching chapter via
+    log.chapters() and seeks its endTime (a closed chapter) rather than
+    'live'.
+    """
+    client, fake = _make_client_with_fake(monkeypatch)
+    fake.log.chapters_result = {
+        'chapters': [
+            {'beginTime': 1.0, 'beginSeq': 10, 'endTime': 20.0, 'outcome': 'ok'},
+            {'beginTime': 21.0, 'beginSeq': 30, 'endTime': 40.0, 'outcome': 'ok'},
+        ]
+    }
+
+    result = await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=30)
+
+    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log._session.seek_calls == [40.0]
+    assert fake.log._session.get_traces_calls == [10]
+    assert fake.log._session.close_calls == 1
+    assert result == {'open': [{'seq': 1, 'kind': 'open-trace'}], 'closed': [{'seq': 2, 'kind': 'closed-trace'}]}
+
+
+async def test_log_traces_with_chapter_begin_seq_seeks_live_when_chapter_open(monkeypatch):
+    """A chapter with no endTime is still open/live -- seek 'live', not None."""
+    client, fake = _make_client_with_fake(monkeypatch)
+    fake.log.chapters_result = {'chapters': [{'beginTime': 1.0, 'beginSeq': 10, 'endTime': None, 'outcome': None}]}
+
+    await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=10)
+
+    assert fake.log._session.seek_calls == ['live']
+
+
+async def test_log_traces_with_unknown_chapter_begin_seq_raises_keyerror(monkeypatch):
+    """No chapter matches chapter_begin_seq -> KeyError(chapter_begin_seq), and
+    the session is still closed in the finally block.
+    """
+    client, fake = _make_client_with_fake(monkeypatch)
+    fake.log.chapters_result = {'chapters': [{'beginTime': 1.0, 'beginSeq': 10, 'endTime': 20.0, 'outcome': 'ok'}]}
+
+    with pytest.raises(KeyError, match='999'):
+        await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=999)
+
+    assert fake.log._session.seek_calls == []
+    assert fake.log._session.get_traces_calls == []
+    assert fake.log._session.close_calls == 1
+
+
+async def test_log_traces_defaults_chapter_begin_seq_to_none_seeks_live(monkeypatch):
+    """chapter_begin_seq is optional; omitting it keeps today's seek('live')
+    behavior and never calls log.chapters().
+    """
+    client, fake = _make_client_with_fake(monkeypatch)
+
+    await client.log_traces('proj-1', 'source-a', 'prod', n=10)
+
+    assert fake.log.chapters_calls == []
+    assert fake.log._session.seek_calls == ['live']
+
+
+async def test_log_trace_seeks_live_calls_get_trace_closes_in_finally(monkeypatch):
+    """log_trace seeks 'live', calls get_trace(begin_seq), and closes in finally.
+
+    The seam is a faithful transport: it returns the SDK's raw
+    ``{'summary': {...}, 'events': [...]}`` shape verbatim, no unwrapping.
+    """
+    client, fake = _make_client_with_fake(monkeypatch)
+
+    result = await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
+
+    assert fake.log.open_event_stream_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log._session.seek_calls == ['live']
+    assert fake.log._session.get_trace_calls == [5]
+    assert fake.log._session.close_calls == 1
+    assert result == {'summary': {'beginSeq': 5}, 'events': [{'seq': 5, 'kind': 'trace'}]}
+
+
+async def test_log_trace_closes_even_when_get_trace_raises_keyerror(monkeypatch):
+    """log_trace closes the session in finally block even when get_trace raises KeyError."""
+    client, fake = _make_client_with_fake(monkeypatch)
+    fake.log._session._get_trace_raises = KeyError('not_found')
+
+    with pytest.raises(KeyError, match='not_found'):
+        await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
+
+    assert fake.log._session.close_calls == 1

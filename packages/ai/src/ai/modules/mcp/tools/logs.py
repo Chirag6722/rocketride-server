@@ -1,0 +1,237 @@
+# Copyright 2026 Aparavi Software AG. MIT License.
+"""DVR run-log tools: chapters, paged events, and per-object traces.
+
+Backed by the engine's persisted continuum (``rrext_log``) — works for past
+and live runs, keyed by (projectId, source, runKind), never task tokens.
+Runs recorded with pipelineTraceLevel 'none' have no flow events: chapters
+and console still exist, but traces come back empty.
+"""
+
+import asyncio
+from typing import Any, Dict
+
+from ..errors import _bad, _timeout
+from ..tooling import ToolRegistry
+
+DEFAULT_TIMEOUT_SECONDS = 30
+LOG_READ_MAX_EVENTS = 200
+LOG_TRACES_MIN_N = 1
+LOG_TRACES_MAX_N = 100
+LOG_TRACES_DEFAULT_N = 20
+
+_RETENTION_HINT = (
+    'runs are evicted after 7 days (dev) / 30 days (deploy), or earlier under '
+    'segment/chapter caps; re-run the pipeline to produce a fresh trace'
+)
+_ADDRESSING_HINT = 'use the projectId and source returned by run_pipeline / run_dropper_pipe'
+_KEY_SCHEMA = {
+    'projectId': {'type': 'string', 'description': 'Pipeline project id (returned by run tools)'},
+    'source': {'type': 'string', 'description': 'Source component id (returned by run tools)'},
+    'runKind': {'type': 'string', 'enum': ['dev', 'deploy'], 'description': "Continuum kind (default 'dev')"},
+}
+
+
+def _require_key(args: Dict[str, Any]):
+    project_id = args.get('projectId')
+    source = args.get('source')
+    if not project_id or not source:
+        missing = 'projectId' if not project_id else 'source'
+        return None, _bad(f'{missing} is required', _ADDRESSING_HINT)
+    return (project_id, source, args.get('runKind') or 'dev'), None
+
+
+async def _log_chapters(client, tasks, args: Dict[str, Any]) -> dict:
+    key, err = _require_key(args)
+    if err:
+        return err
+    project_id, source, run_kind = key
+    try:
+        result = await asyncio.wait_for(
+            client.log_chapters(project_id, source, run_kind), timeout=DEFAULT_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        return _timeout('log_chapters timed out waiting for the engine', 'retry log_chapters')
+    chapters = (result or {}).get('chapters') or []
+    if not chapters:
+        return {
+            'ok': False,
+            'error_type': 'not_found',
+            'message': 'no recorded runs for this projectId/source',
+            'hint': _ADDRESSING_HINT,
+        }
+    return {'ok': True, 'chapters': chapters, 'horizonSeq': (result or {}).get('horizonSeq')}
+
+
+async def _log_read(client, tasks, args: Dict[str, Any]) -> dict:
+    key, err = _require_key(args)
+    if err:
+        return err
+    project_id, source, run_kind = key
+    # Floored to >=1 (a caller-supplied 0 or negative maxEvents would
+    # otherwise reach the engine as-is) and still capped at LOG_READ_MAX_EVENTS.
+    max_events = max(1, min(int(args.get('maxEvents') or LOG_READ_MAX_EVENTS), LOG_READ_MAX_EVENTS))
+    try:
+        result = await asyncio.wait_for(
+            client.log_read(
+                project_id,
+                source,
+                run_kind,
+                from_seq=args.get('fromSeq'),
+                cursor=args.get('cursor'),
+                max_events=max_events,
+                types=args.get('types'),
+            ),
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return _timeout(
+            'log_read timed out waiting for the engine',
+            'retry log_read, optionally with a smaller maxEvents',
+        )
+    result = result or {}
+    return {
+        'ok': True,
+        'events': result.get('events') or [],
+        'nextCursor': result.get('nextSeq'),
+        'truncatedAtSeq': result.get('truncatedAtSeq'),
+    }
+
+
+async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
+    key, err = _require_key(args)
+    if err:
+        return err
+    project_id, source, run_kind = key
+    n = max(LOG_TRACES_MIN_N, min(int(args.get('n') or LOG_TRACES_DEFAULT_N), LOG_TRACES_MAX_N))
+    chapter_begin_seq = args.get('chapterBeginSeq')
+    try:
+        result = await asyncio.wait_for(
+            client.log_traces(
+                project_id,
+                source,
+                run_kind,
+                n=n,
+                chapter_begin_seq=int(chapter_begin_seq) if chapter_begin_seq is not None else None,
+            ),
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return _timeout('log_traces timed out waiting for the engine', 'retry log_traces')
+    except KeyError:
+        return {
+            'ok': False,
+            'error_type': 'not_found',
+            'message': f'chapter {chapter_begin_seq} not found or expired',
+            'hint': _RETENTION_HINT,
+        }
+    result = result or {}
+    closed = result.get('closed') or []
+    open_traces = result.get('open') or []
+    payload = {'ok': True, 'traces': closed, 'open': open_traces}
+    if not closed and not open_traces:
+        payload['note'] = (
+            'no traces recorded — the run may have been submitted with '
+            "pipelineTraceLevel 'none' (MCP run tools default to 'summary')"
+        )
+    return payload
+
+
+async def _log_trace(client, tasks, args: Dict[str, Any]) -> dict:
+    key, err = _require_key(args)
+    if err:
+        return err
+    project_id, source, run_kind = key
+    begin_seq = args.get('beginSeq')
+    if begin_seq is None:
+        return _bad('beginSeq is required', 'get it from log_traces (each trace summary carries beginSeq)')
+    try:
+        result = await asyncio.wait_for(
+            client.log_trace(project_id, source, run_kind, begin_seq=int(begin_seq)),
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return _timeout('log_trace timed out waiting for the engine', 'retry log_trace')
+    except KeyError:
+        return {
+            'ok': False,
+            'error_type': 'trace_expired',
+            'message': f'trace {begin_seq} is below the retention horizon',
+            'hint': _RETENTION_HINT,
+        }
+    result = result or {}
+    return {
+        'ok': True,
+        'beginSeq': int(begin_seq),
+        'summary': result.get('summary'),
+        'events': result.get('events') or [],
+    }
+
+
+def register(registry: ToolRegistry) -> None:
+    """Register the DVR run-log tools (`log_chapters`, `log_read`, `log_traces`, `log_trace`)."""
+    registry.register(
+        'log_chapters',
+        'List recorded runs (chapters) for a pipeline from the persistent run log — begin/end '
+        'times, beginSeq, outcome. Works for past and live runs.',
+        {'type': 'object', 'properties': _KEY_SCHEMA, 'required': ['projectId', 'source']},
+    )(_log_chapters)
+    registry.register(
+        'log_read',
+        'Read raw run-log events for a pipeline, cursor-paged. types=["output"] returns console '
+        'lines only. Pass nextCursor back as cursor to continue.',
+        {
+            'type': 'object',
+            'properties': {
+                **_KEY_SCHEMA,
+                'fromSeq': {'type': 'integer', 'description': 'Sequence number to start reading from'},
+                'cursor': {'type': 'integer', 'description': 'Opaque cursor from a previous nextCursor'},
+                'maxEvents': {
+                    'type': 'integer',
+                    'description': f'Max events to return, capped at {LOG_READ_MAX_EVENTS}',
+                },
+                'types': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': 'Filter to these event types, e.g. ["output"] for console lines only',
+                },
+            },
+            'required': ['projectId', 'source'],
+        },
+    )(_log_read)
+    registry.register(
+        'log_traces',
+        'List per-object trace summaries (one per file/document that traveled the pipeline) for '
+        'recent runs. Each carries beginSeq — the permanent trace id. `traces` holds finished '
+        'runs; `open` holds ones still in flight. By default returns the latest run; pass '
+        'chapterBeginSeq (from log_chapters) to address a specific past run instead.',
+        {
+            'type': 'object',
+            'properties': {
+                **_KEY_SCHEMA,
+                'n': {
+                    'type': 'integer',
+                    'description': f'Max number of traces to return (default {LOG_TRACES_DEFAULT_N}, '
+                    f'clamped to {LOG_TRACES_MIN_N}-{LOG_TRACES_MAX_N})',
+                },
+                'chapterBeginSeq': {
+                    'type': 'integer',
+                    'description': 'Address a specific past run by its chapter beginSeq (from log_chapters) '
+                    'instead of the latest/live run',
+                },
+            },
+            'required': ['projectId', 'source'],
+        },
+    )(_log_traces)
+    registry.register(
+        'log_trace',
+        "Fetch one object's full begin-to-end journey through the pipeline by its beginSeq: a "
+        'summary plus every component enter/leave with lane data, plus node narration.',
+        {
+            'type': 'object',
+            'properties': {
+                **_KEY_SCHEMA,
+                'beginSeq': {'type': 'integer', 'description': 'Trace id, from log_traces'},
+            },
+            'required': ['projectId', 'source', 'beginSeq'],
+        },
+    )(_log_trace)
