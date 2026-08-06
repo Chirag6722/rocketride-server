@@ -28,13 +28,15 @@
  * independently; this module only builds the shell itself.
  *
  * Actions:
+ *   shell-ui:test    — run node:test against co-located TypeScript tests
  *   shell-ui:bundle  — run rsbuild build
  *   shell-ui:copy    — sync build/shell-ui → dist/server/static/shell
- *   shell-ui:build   — full build: client-typescript → bundle → copy
+ *   shell-ui:build   — full build: client-typescript → test → bundle → copy
  *   shell-ui:dev     — start rsbuild dev server on port 3000
  *   shell-ui:clean   — remove build artifacts
  */
 const path = require('path');
+const { readdir } = require('node:fs/promises');
 const {
 	execCommand,
 	syncDir,
@@ -142,6 +144,25 @@ function makeCopyAction() {
 	};
 }
 
+/** Run co-located shell-ui TypeScript tests through node:test. */
+function makeTestRunAction() {
+	return {
+		description: 'Testing shell-ui',
+		run: async (ctx, task) => {
+			const testFiles = (await readdir(SRC_DIR, { recursive: true }))
+				.filter((file) => file.endsWith('.test.ts') || file.endsWith('.test.tsx'))
+				.map((file) => path.join('src', file));
+
+			if (testFiles.length === 0) {
+				task.output = 'No shell-ui test files found';
+				return;
+			}
+
+			await execCommand('node', ['--import', 'tsx', '--test', '--test-reporter=spec', ...testFiles], { task, cwd: APP_ROOT });
+		},
+	};
+}
+
 // =============================================================================
 // MODULE DEFINITION
 // =============================================================================
@@ -151,9 +172,18 @@ const shellUiModule = {
 	description: 'Shell Host Application',
 
 	actions: [
-		// Internal actions (no description — not shown in builder --help)
+		// Internal actions are not shown in builder --help.
+		{ name: 'shell-ui:test-run', action: makeTestRunAction },
 		{ name: 'shell-ui:bundle', action: makeBundleAction },
 		{ name: 'shell-ui:copy', action: makeCopyAction },
+
+		{
+			name: 'shell-ui:test',
+			action: () => ({
+				description: 'Testing shell-ui',
+				steps: ['client-typescript:build', 'shell-ui:test-run'],
+			}),
+		},
 
 		{
 			// Full build: compile TS client SDK, bundle shell, copy to dist.
@@ -162,6 +192,7 @@ const shellUiModule = {
 				description: 'Build shell-ui',
 				steps: [
 					'client-typescript:build',
+					'shell-ui:test-run',
 					'shell-ui:bundle',
 					'shell-ui:copy',
 				],
@@ -266,14 +297,15 @@ const shellContractModule = {
 			}),
 		},
 		{
-			// Integrity check: regenerate the barrels + per-version conformance
-			// floors from the immutable versions/*.d.ts WITHOUT freezing a new
-			// version. CI runs this and then `git diff --exit-code` on the generated
-			// files — a nonzero diff means a floor was hand-edited/dropped to launder
-			// a removed export past the tsc floors. Nothing is written otherwise.
+			// RESET to a fresh v0: drops every frozen version and re-mints v0
+			// from the CURRENT live surface (pre-1.0 policy — intentional
+			// breaking changes collapse the contract history). CI pairs this
+			// with `git diff --exit-code` on the generated files: a committed
+			// contract that disagrees with the live surface — including a
+			// hand-edited floor or version file — fails the diff.
 			name: 'shell:regen',
 			action: () => ({
-				description: 'Regenerate shell-api barrels + floors from frozen versions (no new version)',
+				description: 'Recreate the v0 shell-api freeze from the live surface (contract reset)',
 				steps: ['client-typescript:build', 'shell:regen-run'],
 			}),
 		},
