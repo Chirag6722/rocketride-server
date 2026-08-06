@@ -155,6 +155,9 @@ add_subdirectory(engine-core)
 # Engine library (engLib) - engine-specific functionality
 add_subdirectory(engine-lib)
 
+# Shared engine module (engineMod) - engine-lib provides its engLib target
+add_subdirectory(engine-mod)
+
 # Main engine executable (external to packages/server)
 add_subdirectory(${ROCKETRIDE_PROJECT_ROOT}/packages/engine ${CMAKE_BINARY_DIR}/packages/engine)
 
