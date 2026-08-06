@@ -177,6 +177,18 @@ class TestGuessMediaType:
     def test_content_type_parameters_stripped(self):
         assert guess_media_type('file.txt', 'text/plain; charset=utf-8') == 'text/plain'
 
+    def test_content_type_case_normalized(self):
+        # A mixed-case reported type must lowercase so the downstream
+        # startswith('image/') lane check still routes it correctly.
+        assert guess_media_type('file.bin', 'IMAGE/PNG') == 'image/png'
+        assert guess_media_type('file.bin', 'Image/PNG; charset=binary') == 'image/png'
+
+    def test_malformed_content_type_falls_back_to_extension(self):
+        # A present-but-empty-after-normalization content type must not win;
+        # fall through to the filename extension.
+        assert guess_media_type('photo.jpg', '   ; charset=utf-8') == 'image/jpeg'
+        assert guess_media_type('mystery.xyz', ' ; x=y') == 'application/octet-stream'
+
 
 class TestServicesJsonSchema:
     """Validate the shipped services.json contract."""

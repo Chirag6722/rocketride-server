@@ -6,7 +6,7 @@ A RocketRide source node that connects a Discord bot to your pipeline, routing i
 
 A `source` node (`discord://`) that authenticates with a bot you create in the Discord Developer Portal and listens for incoming messages via the Discord Gateway. It handles text and media alike: images, audio, video, and documents are each downloaded (up to a configurable size limit) and routed to the matching pipeline lane. The pipeline answer produced is sent back to the originating channel, as a reply, or in a thread—depending on configuration.
 
-The node uses **discord.py** to maintain a resilient Gateway connection with automatic heartbeating, resume, and reconnect logic. Attachment downloads use **aiohttp** for concurrency.
+The node uses **discord.py** to maintain a resilient Gateway connection with automatic heartbeating, resume, and reconnect logic. Attachments are downloaded through discord.py's `Attachment.read()` (which uses `aiohttp` under the hood; it is pulled in transitively by discord.py, not a direct dependency).
 
 ---
 
@@ -94,7 +94,7 @@ If the pipeline produces no answers, nothing is sent.
 1. User sends a message with attachments.
 2. The node receives the `MESSAGE_CREATE` event from the Gateway.
 3. For each attachment, the node checks its size against `maxAttachmentBytes`.
-4. If under the limit, the node downloads the file concurrently via the Discord CDN.
+4. If under the limit, the node downloads the file from the Discord CDN via discord.py's `Attachment.read()`.
 5. The file is routed to the appropriate lane (image, audio, video, or tags based on MIME type).
 6. On failure (network, size, or permission), the attachment is skipped with a debug log and `monitorFailed()` call.
 

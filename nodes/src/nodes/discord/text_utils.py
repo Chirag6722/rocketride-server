@@ -173,7 +173,13 @@ def guess_media_type(filename: str, content_type: str = '') -> str:
         str: A MIME type string, defaulting to 'application/octet-stream'.
     """
     if content_type:
-        return content_type.split(';')[0].strip()
+        # Normalize to lowercase without parameters (e.g. '; charset=utf-8').
+        # discord.py usually reports lowercase, but a mixed-case 'Image/PNG'
+        # would otherwise fail the 'image/' lane check downstream. A malformed
+        # value that normalizes to empty falls through to the extension guess.
+        mime = content_type.split(';')[0].strip().lower()
+        if mime:
+            return mime
 
     filename_lower = filename.lower()
     for ext, mime_type in _EXT_TO_MIME.items():

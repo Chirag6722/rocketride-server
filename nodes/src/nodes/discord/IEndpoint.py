@@ -21,11 +21,10 @@
 # SOFTWARE.
 # =============================================================================
 
-import argparse
 import asyncio
 import json
 import os
-import sys
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from rocketlib import (
@@ -38,7 +37,6 @@ from rocketlib import (
     getObject,
     AVI_ACTION,
 )
-from ai.web import WebServer
 
 from depends import depends  # type: ignore
 
@@ -60,13 +58,13 @@ class IEndpoint(IEndpointBase):
     pipeline lane, and sends the pipeline's answer back to the originating
     channel, message, or thread.
 
-    Mirrors the Telegram node's architecture: a blocking WebServer keeps the
-    endpoint process alive, and the Discord Gateway client runs as a background
-    task started from the WebServer's async startup hook.
+    Mirrors the Telegram node's architecture: the endpoint registers on the
+    shared WebServer bootstrapped by ``node.py`` and blocks on a shutdown event,
+    while the Discord Gateway client runs as a background task on the shared
+    server's event loop.
     """
 
     target: IEndpointBase | None = None
-    _server: WebServer | None = None
     _bot: Optional[commands.Bot] = None
     _bot_task: asyncio.Task | None = None
     _bot_token: str = ''
@@ -85,8 +83,10 @@ class IEndpoint(IEndpointBase):
     def _get_discord_config(self) -> Dict[str, Any]:
         """Read the Discord config block from serviceConfig parameters.
 
-        The engine strips the field namespace prefix ('discord.') before
-        storing values, so they arrive nested under a 'discord' dict.
+        The engine delivers the ``discord.*`` fields flat under ``parameters``
+        (the ``discord.`` prefix is stripped), matching the Telegram node. A
+        nested ``discord`` mapping is honored if one is present, but only when
+        it is actually a dict; otherwise the flat ``parameters`` are used.
 
         Returns:
             Dict[str, Any]: The Discord configuration dictionary, or an empty
@@ -94,7 +94,8 @@ class IEndpoint(IEndpointBase):
         """
         try:
             parameters = self.endpoint.serviceConfig['parameters']
-            return parameters.get('discord', parameters)
+            block = parameters.get('discord')
+            return block if isinstance(block, dict) else parameters
         except Exception as e:
             debug(f'Discord _get_discord_config: EXCEPTION {e}')
             return {}
@@ -107,10 +108,10 @@ class IEndpoint(IEndpointBase):
         """Entry point called by the RocketRide engine to start the node.
 
         Stores the engine-provided target endpoint, then delegates to _run()
-        which starts the WebServer (blocking). The _path and _scanCallback
-        arguments are part of the IEndpointBase interface but are unused here
-        because this source receives data via the Discord Gateway push rather
-        than by scanning a filesystem path.
+        which registers on the shared WebServer and blocks until shutdown. The
+        _path and _scanCallback arguments are part of the IEndpointBase
+        interface but are unused here because this source receives data via the
+        Discord Gateway push rather than by scanning a filesystem path.
 
         Args:
             _path (str): Unused. Provided by the engine as the scan root path.
@@ -123,26 +124,49 @@ class IEndpoint(IEndpointBase):
         self.target = self.endpoint.target
         self._run()
 
-    def _run(self):
-        """Bootstrap the WebServer and cache configuration.
+    @staticmethod
+    def _as_str_list(value: Any) -> List[str]:
+        """Coerce a config value into a list of string ids.
 
-        Parses ``--data_host`` and ``--data_port`` from sys.argv, reads and
-        caches the Discord config, creates the WebServer with startup/shutdown
-        hooks, and starts it (blocking until shutdown). The Gateway client is
-        launched from the async _startup hook.
+        Guards against a bare string (which would otherwise iterate into a
+        per-character allowlist and silently block every real id) and other
+        non-list shapes.
+
+        Args:
+            value (Any): The raw config value (expected: list of ids).
+
+        Returns:
+            List[str]: The ids as strings, or an empty list.
+        """
+        if not value:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, (list, tuple)):
+            return [str(v) for v in value]
+        return [str(value)]
+
+    def _run(self):
+        """Register on the shared WebServer from ``node.py`` and block on shutdown.
+
+        EaaS spawns this subprocess with ``--data_port=N``; ``node.py``
+        bootstraps a shared :class:`WebServer` on a background event loop and
+        exposes it as ``ai.node.shared_web_server``. We register our target
+        endpoint on that server and drive the Gateway client's startup/shutdown
+        on the shared ``server_loop`` — so the background bot task outlives
+        ``_startup`` — then block on a shutdown event so ``scanObjects()`` does
+        not return. This mirrors the Telegram source node. Constructing a second
+        WebServer here (as an earlier version did) collides with the shared
+        server already bound to ``--data_port`` (``EADDRINUSE``) and wires the
+        target onto the wrong server, so the node never starts under EaaS.
 
         Returns:
             None
         """
-        parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument('--data_host', type=str, default='localhost')
-        parser.add_argument('--data_port', type=int, default=5567)
-        parsed_args, _ = parser.parse_known_args(sys.argv)
-
         config = self._get_discord_config()
         self._bot_token = config.get('botToken', '')
-        self._guild_ids = [str(g) for g in (config.get('guildIds') or [])]
-        self._channel_ids = [str(c) for c in (config.get('channelIds') or [])]
+        self._guild_ids = self._as_str_list(config.get('guildIds'))
+        self._channel_ids = self._as_str_list(config.get('channelIds'))
         self._ignore_bots = config.get('ignoreBots', True)
         self._require_mention = config.get('requireMention', False)
         self._reply_mode = config.get('replyMode', 'reply')
@@ -151,22 +175,44 @@ class IEndpoint(IEndpointBase):
         self._send_responses = config.get('sendResponses', True)
         debug(f'Discord _run: token_present={bool(self._bot_token)} reply_mode={self._reply_mode!r}')
 
-        self._server = WebServer(
-            config={
-                'port': parsed_args.data_port,
-                'host': parsed_args.data_host,
-            },
-            on_startup=self._startup,
-            on_shutdown=self._shutdown,
-        )
-        self._server.app.state.target = self.target
-        self._server.run()
+        # Discover the shared server lazily — node.py assigns its module-level
+        # ``shared_web_server`` at runtime, after this file is imported. Raises a
+        # self-explaining error if this process has no shared server.
+        from ai import node
+
+        shared = node.require_shared_web_server('discord')
+        shared.app.state.target = self.target
+
+        # Drive _startup on the shared ``server_loop`` (not a throwaway
+        # asyncio.run loop): _startup launches the Gateway client as a
+        # background task that must live for the whole subprocess, so it needs
+        # the long-lived loop that hosts the shared WebServer.
+        from ai.node import server_loop
+
+        try:
+            startup_future = asyncio.run_coroutine_threadsafe(self._startup(), server_loop)
+            startup_future.result(timeout=30)
+        except Exception as e:
+            debug(f'Discord _startup raised: {e}')
+            raise
+
+        # Block scanObjects() until shutdown. In production the subprocess is
+        # terminated by EaaS, interrupting this wait — mirroring how uvicorn's
+        # server.run() blocked until the same external signal.
+        self._shutdown_event = threading.Event()
+        self._shutdown_event.wait()
+
+        try:
+            shutdown_future = asyncio.run_coroutine_threadsafe(self._shutdown(), server_loop)
+            shutdown_future.result(timeout=10)
+        except Exception as e:
+            debug(f'Discord _shutdown raised: {e}')
 
     async def _startup(self):
         """Initialize the Discord Gateway client and start it as a background task.
 
-        Called by the WebServer on startup (inside its event loop). Validates
-        the token, builds the bot with the required intents, registers the
+        Scheduled by _run on the shared server's event loop. Validates the
+        token, builds the bot with the required intents, registers the
         on_ready / on_message handlers, and launches bot.start() concurrently.
 
         Returns:
@@ -273,7 +319,9 @@ class IEndpoint(IEndpointBase):
                 allowed_guild_ids=self._guild_ids,
                 allowed_channel_ids=self._channel_ids,
                 require_mention=self._require_mention,
-                is_mentioned=bool(bot_user is not None and bot_user.mentioned_in(message)),
+                # Direct @mention only: `mentioned_in` also returns True for
+                # @everyone/@here, which would defeat the require_mention gate.
+                is_mentioned=bool(bot_user is not None and bot_user in message.mentions),
             ):
                 return
 
@@ -327,6 +375,11 @@ class IEndpoint(IEndpointBase):
     async def _run_with_optional_typing(self, message: discord.Message, coro_factory):
         """Run an awaitable, optionally showing the Discord typing indicator.
 
+        The pipeline awaitable is executed exactly once. Showing or closing the
+        typing indicator is best-effort: a failure there must not cause the
+        pipeline to run a second time (which would re-ingest the input and
+        double the monitor accounting).
+
         Args:
             message (discord.Message): The message whose channel shows typing.
             coro_factory (Callable): Zero-arg callable returning the awaitable.
@@ -334,13 +387,25 @@ class IEndpoint(IEndpointBase):
         Returns:
             Any: The awaited result.
         """
-        if self._show_typing:
-            try:
-                async with message.channel.typing():
-                    return await coro_factory()
-            except Exception as e:
-                debug(f'Discord: typing indicator failed: {e}')
-        return await coro_factory()
+        if not self._show_typing:
+            return await coro_factory()
+
+        typing_cm = None
+        try:
+            typing_cm = message.channel.typing()
+            await typing_cm.__aenter__()
+        except Exception as e:
+            debug(f'Discord: typing indicator failed to start: {e}')
+            typing_cm = None
+
+        try:
+            return await coro_factory()
+        finally:
+            if typing_cm is not None:
+                try:
+                    await typing_cm.__aexit__(None, None, None)
+                except Exception as e:
+                    debug(f'Discord: typing indicator failed to close: {e}')
 
     async def _process_attachment(self, message: discord.Message, attachment: discord.Attachment) -> str:
         """Download one attachment and route it to the matching lane.
