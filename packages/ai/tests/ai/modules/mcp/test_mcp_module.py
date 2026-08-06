@@ -65,33 +65,19 @@ async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
 
 
 @pytest.mark.asyncio
-async def test_initmodule_mounts_mcp_route(monkeypatch, fake_engine):
-    from fastapi import FastAPI
+async def test_initmodule_mounts_mcp_route(monkeypatch, fake_engine, fake_web_server):
     import ai.modules.mcp as mcp_module
 
     monkeypatch.setattr(mcp_module, 'make_engine_client', lambda cfg, on_event=None: fake_engine)
 
-    class FakeServer:
-        def __init__(self):
-            self.app = FastAPI()
-            self.public = set()
-
-        def add_route(self, path, handler, methods, public=False):
-            self.app.add_api_route(path, handler, methods=methods)
-            if public:
-                self.public.add(path)
-
-        def is_public_route(self, path):
-            return path in self.public
-
-    srv = FakeServer()
+    srv = fake_web_server
     mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
     paths = {getattr(r, 'path', None) for r in srv.app.routes}
     assert any(p and p.startswith('/mcp') for p in paths)
 
 
 @pytest.mark.asyncio
-async def test_shutdown_without_client_does_not_raise(monkeypatch, fake_engine):
+async def test_shutdown_without_client_does_not_raise(monkeypatch, fake_engine, fake_web_server):
     """No engine client was ever created (_state['client'] stays None) —
     shutdown must still drain the session manager cleanly without raising.
 
@@ -99,25 +85,11 @@ async def test_shutdown_without_client_does_not_raise(monkeypatch, fake_engine):
     no-op, pinning down that `_stack.aclose()` (session-manager teardown)
     alone completes without error.
     """
-    from fastapi import FastAPI
     import ai.modules.mcp as mcp_module
 
     monkeypatch.setattr(mcp_module, 'make_engine_client', lambda cfg, on_event=None: fake_engine)
 
-    class FakeServer:
-        def __init__(self):
-            self.app = FastAPI()
-            self.public = set()
-
-        def add_route(self, path, handler, methods, public=False):
-            self.app.add_api_route(path, handler, methods=methods)
-            if public:
-                self.public.add(path)
-
-        def is_public_route(self, path):
-            return path in self.public
-
-    srv = FakeServer()
+    srv = fake_web_server
     mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
 
     # engine_factory (and therefore make_engine_client) is never invoked, so
@@ -129,7 +101,7 @@ async def test_shutdown_without_client_does_not_raise(monkeypatch, fake_engine):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
+async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch, fake_web_server):
     """When a request has already lazily created the engine client, shutdown
     must still close it — the reordering to drain-then-close must not turn
     into "never close".
@@ -145,7 +117,6 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
     hooks are sufficient to exercise "engine client closed after session
     manager teardown" without depending on that wire-level shape.
     """
-    from fastapi import FastAPI
     from mcp.client import Client
 
     import ai.modules.mcp as mcp_module
@@ -176,20 +147,7 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch):
 
     monkeypatch.setattr(mcp_module, 'build_mcp_server', _capturing_build_mcp_server)
 
-    class FakeServer:
-        def __init__(self):
-            self.app = FastAPI()
-            self.public = set()
-
-        def add_route(self, path, handler, methods, public=False):
-            self.app.add_api_route(path, handler, methods=methods)
-            if public:
-                self.public.add(path)
-
-        def is_public_route(self, path):
-            return path in self.public
-
-    srv = FakeServer()
+    srv = fake_web_server
     mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
 
     for handler in srv.app.router.on_startup:

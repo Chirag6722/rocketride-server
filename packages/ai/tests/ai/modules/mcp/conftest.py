@@ -301,3 +301,28 @@ class FakeEngineClient:
 @pytest.fixture
 def fake_engine():
     return FakeEngineClient()
+
+
+class FakeWebServer:
+    """Double for ai.web.server.WebServer as consumed by mcp.initModule —
+    single copy for the suite (was duplicated per-test).
+    """
+
+    def __init__(self):
+        from fastapi import FastAPI
+
+        self.app = FastAPI()
+        self.public = set()
+
+    def add_route(self, path, handler, methods, public=False):
+        self.app.add_api_route(path, handler, methods=methods)
+        if public:
+            self.public.add(path)
+
+    def is_public_route(self, path):
+        return path in self.public
+
+
+@pytest.fixture
+def fake_web_server():
+    return FakeWebServer()

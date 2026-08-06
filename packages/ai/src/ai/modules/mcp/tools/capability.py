@@ -166,7 +166,7 @@ async def _deploy_add(client, tasks, args: Dict[str, Any]) -> dict:
 
 
 async def _deploy_list(client, tasks, args: Dict[str, Any]) -> dict:
-    deployments = await client.deploy_list()
+    deployments = (await client.deploy_list()) or []
     return {'ok': True, 'deployments': deployments, 'count': len(deployments)}
 
 

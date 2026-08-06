@@ -123,13 +123,14 @@ def build_mcp_server(
                     # instead of letting v2's catch-all reduce it to "Internal
                     # server error".
                     raise MCPError(types.INTERNAL_ERROR, hard_exc.message) from hard_exc
-        # structured_content bypasses json.dumps(default=str): handlers MUST
-        # return JSON-primitive dicts (all 22 do today -- values come from
-        # JSON-over-WS engine responses). A datetime/bytes value would pass the
-        # text path but crash SDK response serialization.
+        # Round-trip one sanitized payload for both fields: default=str
+        # coerces any non-JSON value (datetime/bytes) in the text path, and
+        # json.loads of that same text guarantees structured_content can't
+        # crash SDK serialization or diverge from the text content.
+        text = json.dumps(result, default=str)
         return types.CallToolResult(
-            content=[types.TextContent(type='text', text=json.dumps(result, default=str))],
-            structured_content=result,
+            content=[types.TextContent(type='text', text=text)],
+            structured_content=json.loads(text),
         )
 
     async def _on_list_resources(ctx, params: types.PaginatedRequestParams | None) -> types.ListResourcesResult:
@@ -149,7 +150,7 @@ def build_mcp_server(
         ui_html = apps_mod.read_ui_resource(uri_str, apps_dir)
         if ui_html is not None:
             return types.ReadResourceResult(
-                contents=[types.TextResourceContents(uri=params.uri, mimeType=apps_mod.UI_MIME_TYPE, text=ui_html)],
+                contents=[types.TextResourceContents(uri=params.uri, mime_type=apps_mod.UI_MIME_TYPE, text=ui_html)],
                 ttl_ms=UI_READ_TTL_MS,
                 cache_scope=CACHE_SCOPE,
             )
@@ -163,7 +164,7 @@ def build_mcp_server(
         else:
             ttl_ms = 0
         return types.ReadResourceResult(
-            contents=[types.TextResourceContents(uri=params.uri, mimeType='application/json', text=text)],
+            contents=[types.TextResourceContents(uri=params.uri, mime_type='application/json', text=text)],
             ttl_ms=ttl_ms,
             cache_scope=CACHE_SCOPE,
         )

@@ -82,11 +82,22 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
     # so the manager's run() context spans the app lifetime correctly.
     # ------------------------------------------------------------------
     _stack = contextlib.AsyncExitStack()
+    # Idempotency: hooks are registered on BOTH the router events and the
+    # _user_startup/_user_shutdown slots below. A server that fires both
+    # paths must not enter session_manager.run() twice or double-close the
+    # shared engine client.
+    _lifecycle = {'started': False, 'stopped': False}
 
     async def _startup() -> None:
+        if _lifecycle['started']:
+            return
+        _lifecycle['started'] = True
         await _stack.enter_async_context(session_manager.run())
 
     async def _shutdown() -> None:
+        if _lifecycle['stopped']:
+            return
+        _lifecycle['stopped'] = True
         # Stop the session manager first so in-flight requests drain, then
         # release the shared engine client. try/finally guarantees the client
         # is closed even if session-manager teardown raises, and that the

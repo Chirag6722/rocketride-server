@@ -23,7 +23,7 @@ title: "MCP Server"
 
 > **Looking for the in-engine HTTP MCP server?** This page documents the
 > standalone `rocketride-mcp` package (stdio transport). The engine also serves
-> a static 23-tool Streamable-HTTP MCP surface directly at `/mcp` on the engine
+> a static 26-tool Streamable-HTTP MCP surface directly at `/mcp` on the engine
 > HTTP port — no separate process required. That surface is documented in the
 > engine module docs (`packages/ai/src/ai/modules/mcp/doc.md`).
 

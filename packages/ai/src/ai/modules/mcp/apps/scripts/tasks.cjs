@@ -72,7 +72,7 @@ function makeBundleAction() {
 
 function makeCleanAction() {
 	return {
-		run: async (ctx, task) => {
+		run: async (_ctx, task) => {
 			await removeDir(DIST_DIR);
 			await setState(BUILD_HASH_KEY, null);
 			task.output = 'Cleaned mcp-widgets';

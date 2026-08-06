@@ -35,6 +35,9 @@ async def _list_components(client, tasks, args: Dict[str, Any]) -> dict:
             'summary': definition.get('description'),
         }
         for name, definition in definitions.items()
+        # One malformed (non-mapping) definition must not block discovery
+        # for the whole catalog.
+        if isinstance(definition, dict)
     ]
     return {'ok': True, 'components': components}
 

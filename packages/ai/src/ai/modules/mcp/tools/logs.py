@@ -70,7 +70,10 @@ async def _log_read(client, tasks, args: Dict[str, Any]) -> dict:
     project_id, source, run_kind = key
     # Floored to >=1 (a caller-supplied 0 or negative maxEvents would
     # otherwise reach the engine as-is) and still capped at LOG_READ_MAX_EVENTS.
-    max_events = max(1, min(int(args.get('maxEvents') or LOG_READ_MAX_EVENTS), LOG_READ_MAX_EVENTS))
+    try:
+        max_events = max(1, min(int(args.get('maxEvents') or LOG_READ_MAX_EVENTS), LOG_READ_MAX_EVENTS))
+    except (TypeError, ValueError):
+        return _bad('maxEvents must be an integer', 'omit it to use the default')
     try:
         result = await asyncio.wait_for(
             client.log_read(
@@ -103,8 +106,12 @@ async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
     if err:
         return err
     project_id, source, run_kind = key
-    n = max(LOG_TRACES_MIN_N, min(int(args.get('n') or LOG_TRACES_DEFAULT_N), LOG_TRACES_MAX_N))
     chapter_begin_seq = args.get('chapterBeginSeq')
+    try:
+        n = max(LOG_TRACES_MIN_N, min(int(args.get('n') or LOG_TRACES_DEFAULT_N), LOG_TRACES_MAX_N))
+        chapter_begin_seq = int(chapter_begin_seq) if chapter_begin_seq is not None else None
+    except (TypeError, ValueError):
+        return _bad('n and chapterBeginSeq must be integers', 'omit n to use the default')
     try:
         result = await asyncio.wait_for(
             client.log_traces(
@@ -112,7 +119,7 @@ async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
                 source,
                 run_kind,
                 n=n,
-                chapter_begin_seq=int(chapter_begin_seq) if chapter_begin_seq is not None else None,
+                chapter_begin_seq=chapter_begin_seq,
             ),
             timeout=DEFAULT_TIMEOUT_SECONDS,
         )
@@ -146,8 +153,12 @@ async def _log_trace(client, tasks, args: Dict[str, Any]) -> dict:
     if begin_seq is None:
         return _bad('beginSeq is required', 'get it from log_traces (each trace summary carries beginSeq)')
     try:
+        begin_seq = int(begin_seq)
+    except (TypeError, ValueError):
+        return _bad('beginSeq must be an integer', 'get it from log_traces (each trace summary carries beginSeq)')
+    try:
         result = await asyncio.wait_for(
-            client.log_trace(project_id, source, run_kind, begin_seq=int(begin_seq)),
+            client.log_trace(project_id, source, run_kind, begin_seq=begin_seq),
             timeout=DEFAULT_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

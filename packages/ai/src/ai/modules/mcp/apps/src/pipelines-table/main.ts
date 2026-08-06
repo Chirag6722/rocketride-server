@@ -37,17 +37,19 @@ function parseRows(result: unknown): TaskRow[] {
 	if (res.isError) {
 		throw new Error(text || 'tool call failed');
 	}
-	if (!text) return [];
+	if (!text) throw new Error('malformed tool result (missing text content)');
 	let payload: { ok?: boolean; tasks?: TaskRow[]; message?: string };
 	try {
 		payload = JSON.parse(text) as { ok?: boolean; tasks?: TaskRow[]; message?: string };
 	} catch {
 		throw new Error('malformed tool result (not JSON)');
 	}
-	if (payload.ok === false) {
-		throw new Error(payload.message || 'tool reported a failure');
+	// The tool contract is { ok: true, tasks: [...] } — anything else renders
+	// as an error, never as an empty "No pipelines running" state.
+	if (payload.ok !== true || !Array.isArray(payload.tasks)) {
+		throw new Error(payload.message || 'malformed tool result');
 	}
-	return payload.tasks ?? [];
+	return payload.tasks;
 }
 
 function makeRefreshButton(): HTMLButtonElement {

@@ -96,26 +96,13 @@ async def _mcp_test_app(monkeypatch, fake_engine):
     real Streamable-HTTP client follows transparently (307 preserves method
     + body) -- httpx does not follow redirects by default.
     """
-    from fastapi import FastAPI
-
     import ai.modules.mcp as mcp_module
+
+    from .conftest import FakeWebServer
 
     monkeypatch.setattr(mcp_module, 'make_engine_client', lambda cfg, on_event=None: fake_engine)
 
-    class FakeServer:
-        def __init__(self):
-            self.app = FastAPI()
-            self.public = set()
-
-        def add_route(self, path, handler, methods, public=False):
-            self.app.add_api_route(path, handler, methods=methods)
-            if public:
-                self.public.add(path)
-
-        def is_public_route(self, path):
-            return path in self.public
-
-    srv = FakeServer()
+    srv = FakeWebServer()
     mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
 
     for handler in srv.app.router.on_startup:

@@ -506,3 +506,26 @@ async def test_run_pipeline_initial_send_timeout_keeps_token_registered(fake_eng
     assert result['error_type'] == 'Timeout'
     assert fake_engine._token in result['hint']
     assert tasks.get(fake_engine._token) is not None
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_use_timeout_registers_no_token(fake_engine, monkeypatch):
+    """The use() timeout branch: distinct envelope, and no token registered
+    (unlike the initial-send branch, there is no token to recover yet).
+    """
+    registry = ToolRegistry()
+    execution.register(registry)
+    tasks = TaskRegistry()
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(fake_engine, 'use', _hang)
+    monkeypatch.setattr(execution, 'DEFAULT_TIMEOUT_SECONDS', 0.01)
+
+    result = await registry.handler('run_pipeline')(fake_engine, tasks, {'pipeline': {'components': []}})
+
+    assert result['ok'] is False
+    assert result['error_type'] == 'Timeout'
+    assert 'start the task' in result['message']
+    assert tasks.list() == []

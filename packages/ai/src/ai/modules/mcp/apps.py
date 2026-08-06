@@ -64,7 +64,7 @@ def list_ui_resources(apps_dir: Optional[Path] = None, engine_origin: Optional[s
         meta = None
         if spec.needs_engine_origin and engine_origin:
             meta = {'ui': {'csp': {'connectDomains': [engine_origin]}}}
-        out.append(types.Resource(uri=spec.uri, name=spec.title, mimeType=UI_MIME_TYPE, meta=meta))
+        out.append(types.Resource(uri=spec.uri, name=spec.title, mime_type=UI_MIME_TYPE, meta=meta))
     return out
 
 

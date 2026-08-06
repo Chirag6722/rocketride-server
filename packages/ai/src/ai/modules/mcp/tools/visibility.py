@@ -52,6 +52,7 @@ from typing import Any, Dict
 
 from ..apps import PIPELINES_TABLE_URI
 from ..errors import _bad
+from ..errors import _timeout
 from ..errors import normalize_error
 from ..tooling import ToolRegistry
 
@@ -174,7 +175,16 @@ async def _monitor(client, tasks, args: Dict[str, Any]) -> dict:
 
 
 async def _list_running_pipelines(client, tasks, args: Dict[str, Any]) -> dict:
-    running = await client.list_tasks()
+    # Same wait_for + in-band envelope as every other blocking seam call: a
+    # wedged engine connection must not hold the tool call open unbounded.
+    try:
+        running = await asyncio.wait_for(client.list_tasks(), timeout=DEFAULT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return _timeout(
+            'list_running_pipelines timed out waiting for the engine',
+            'retry list_running_pipelines',
+        )
+    running = running or []
     return {'ok': True, 'tasks': running, 'count': len(running)}
 
 

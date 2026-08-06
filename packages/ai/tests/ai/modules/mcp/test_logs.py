@@ -222,3 +222,20 @@ async def test_log_trace_timeout_returns_timeout_envelope(fake_engine):
     result = await logs._log_trace(fake_engine, None, {'projectId': 'p1', 'source': 's1', 'beginSeq': 1})
     assert result['ok'] is False
     assert result['error_type'] == 'Timeout'
+
+
+@pytest.mark.asyncio
+async def test_log_chapters_wait_for_wraps_a_hung_seam_call(fake_engine, monkeypatch):
+    """Unlike the scripted-TimeoutError tests above, this hangs the seam and
+    shrinks the budget, proving the asyncio.wait_for wrap actually exists.
+    """
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(fake_engine, 'log_chapters', _hang)
+    monkeypatch.setattr(logs, 'DEFAULT_TIMEOUT_SECONDS', 0.01)
+
+    result = await logs._log_chapters(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
+    assert result['ok'] is False
+    assert result['error_type'] == 'Timeout'

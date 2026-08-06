@@ -126,10 +126,18 @@ class WsEngineClient:
                 self._connected = True
 
     async def close(self) -> None:
-        """Tear down the connection. Safe to call even if never connected."""
-        if self._connected:
-            await self._client.disconnect()
-            self._connected = False
+        """Tear down the connection. Safe to call even if never connected.
+
+        Takes the connect lock so a concurrent ``_ensure_connected`` cannot
+        mark the client connected while teardown runs; the flag clears even
+        if ``disconnect()`` raises.
+        """
+        async with self._connect_lock:
+            if self._connected:
+                try:
+                    await self._client.disconnect()
+                finally:
+                    self._connected = False
 
     async def _request(self, command: str) -> dict:
         await self._ensure_connected()
@@ -323,10 +331,17 @@ class WsEngineClient:
 
 
 def make_engine_client(config: Dict[str, Any]) -> EngineClient:
-    uri = os.environ.get('ROCKETRIDE_URI') or ''
-    auth = os.environ.get('ROCKETRIDE_AUTH') or os.environ.get('ROCKETRIDE_APIKEY') or ''
+    """Build the seam client. ``config`` keys (``rocketride_uri``,
+    ``rocketride_auth``) take precedence; the environment variables are the
+    fallback so existing deployments keep working unchanged.
+    """
+    config = config or {}
+    uri = config.get('rocketride_uri') or os.environ.get('ROCKETRIDE_URI') or ''
+    auth = (
+        config.get('rocketride_auth') or os.environ.get('ROCKETRIDE_AUTH') or os.environ.get('ROCKETRIDE_APIKEY') or ''
+    )
     if not uri:
-        raise ValueError('Missing required environment variable: ROCKETRIDE_URI')
+        raise ValueError('Missing engine URI: set config rocketride_uri or env ROCKETRIDE_URI')
     if not auth:
-        raise ValueError('Missing required environment variable: ROCKETRIDE_AUTH or ROCKETRIDE_APIKEY')
+        raise ValueError('Missing engine auth: set config rocketride_auth or env ROCKETRIDE_AUTH/ROCKETRIDE_APIKEY')
     return WsEngineClient(uri=uri, auth=auth)

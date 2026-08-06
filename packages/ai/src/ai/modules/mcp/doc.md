@@ -338,12 +338,17 @@ shared across event loops or accessed concurrently from multiple threads.
   the engine process's local file scope.
 - **Consequence for `MCP_DEV_NO_AUTH`.** Because there is no path sandboxing,
   the `MCP_DEV_NO_AUTH=1` / `mcp_dev_no_auth` bypass (see above) must **only**
-  ever be enabled on a **loopback bind (`127.0.0.1`)** — never on `0.0.0.0` or
-  any other publicly reachable bind. Combining the auth bypass with a public
-  bind would let anyone reach `/mcp` and read arbitrary server-local files via
-  any of the `filepath`-accepting tools. `initModule` now enforces this: on a
-  non-loopback bind the bypass is ignored (with a warning) and `/mcp` stays
-  authenticated.
+  ever be enabled on a **loopback bind** — never on `0.0.0.0` or any other
+  publicly reachable bind. Combining the auth bypass with a public bind would
+  let anyone reach `/mcp` and read arbitrary server-local files via any of the
+  `filepath`-accepting tools. `initModule` enforces this: the bypass is
+  honored only when the **configured host** (`server.config['host']`, falling
+  back to the module config's `host`, default `localhost`) is exactly
+  `localhost`, `127.0.0.1`, or `::1` — the same allowlist as the environment
+  table above. The check reads the configured value, not the resolved bind
+  address, so a hostname that *resolves* to loopback but isn't one of those
+  three literals does not qualify. On any other value the bypass is ignored
+  (with a warning) and `/mcp` stays authenticated.
 - **Path sandboxing is deferred, not solved.** It is intentionally not
   implemented in this module; the fix lands with the dropper-ingress seam
   (a future revision), which will own path resolution/allowlisting for all
@@ -369,11 +374,11 @@ shared across event loops or accessed concurrently from multiple threads.
 - **Known pre-existing follow-up:** `resources.read_resource` returns a bare `str`,
   which the MCP SDK now deprecates in favor of `Iterable[ReadResourceContents]`.
   Cleanup deferred; not a functional break today.
-- **Auth / OAuth** — today the only auth control is the `MCP_DEV_NO_AUTH` dev bypass,
-  which exempts `/mcp` from the engine's `AuthMiddleware` entirely. There is no OAuth
-  flow, per-client credential, or MCP-spec auth negotiation implemented. Only ever
-  enable the bypass on a **loopback bind (`127.0.0.1`)** — never on `0.0.0.0` or any
-  publicly reachable bind.
+- **Auth / OAuth** — by default `/mcp` is protected by the engine's
+  `AuthMiddleware` like every other route; the `MCP_DEV_NO_AUTH` dev bypass is
+  the only *override* of that default, and it exempts `/mcp` entirely (loopback
+  binds only — see Security above). There is no OAuth flow, per-client
+  credential, or MCP-spec auth negotiation implemented.
 - **DB provisioning** — out of scope for this module; no database is provisioned or
   assumed by any tool/resource here.
 
@@ -414,9 +419,10 @@ one connection and one process, with nothing persisted. A DVR-style run log
 that persists per-project/source/run traces supersedes it in a follow-up
 change.
 
-**2026-08-06** — DVR run-log tools added (+4), `get_pipeline_trace` retired
-(−1): 23 → 26. Run tools now default `pipelineTraceLevel` to `'summary'` and
-return `projectId`/`source`.
+**2026-08-06** — DVR run-log tools added (+4): 22 → 26 (the
+`get_pipeline_trace` retirement is the 23 → 22 step recorded above). Run tools
+now default `pipelineTraceLevel` to `'summary'` and return
+`projectId`/`source`.
 
 ## Running / testing locally
 

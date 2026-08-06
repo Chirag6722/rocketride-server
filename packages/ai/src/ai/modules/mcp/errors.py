@@ -81,7 +81,11 @@ def normalize_error(exc: Exception, *, hint: Optional[str] = None) -> dict:
     self-correct (e.g. missing required argument -> retry with it filled in).
     """
     error_type = type(exc).__name__
-    if error_type in HARD_EXC_NAMES:
+    # isinstance covers builtin subclasses (ConnectionResetError,
+    # ConnectionAbortedError, ...) whose type NAME isn't in the set; the name
+    # check stays as the fallback for SDK classes that collapse to their own
+    # names (e.g. AuthenticationException).
+    if isinstance(exc, (ConnectionError, TimeoutError)) or error_type in HARD_EXC_NAMES:
         raise HardError(str(exc), error_type=error_type)
     return {
         'ok': False,

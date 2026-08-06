@@ -44,3 +44,14 @@ def test_load_pipeline_raises_when_neither_supplied():
 def test_load_pipeline_raises_when_not_an_object():
     with pytest.raises(ValueError):
         load_pipeline({'pipeline': ['not', 'an', 'object']})
+
+
+def test_load_pipeline_reads_json5_syntax(tmp_path):
+    """The json5 path itself: comments and trailing commas, which the plain
+    json.load fallback cannot parse.
+    """
+    pytest.importorskip('json5')
+    f = tmp_path / 'x.pipe'
+    f.write_text('{ // comment\n  "source": "a", "components": [],\n}', encoding='utf-8')
+
+    assert load_pipeline({'filepath': str(f)}) == {'source': 'a', 'components': []}

@@ -789,8 +789,18 @@ def ensure_constraints() -> str:
     current_hash = _compute_hash(req_files + override_files)
     stored_hash = _load_stored_hash(hash_file)
 
-    # Check if rebuild is needed
-    if current_hash == stored_hash and os.path.exists(constraints_path):
+    # Check if rebuild is needed. The derived overrides cache is part of the
+    # predicate: install-time _override_args() reads that file, so a missing
+    # one (partially cleared cache) while override files exist — or a stale
+    # non-empty one after overrides were removed — must trigger a rebuild,
+    # not be silently reused.
+    overrides_path = _get_overrides_path()
+    overrides_cache_nonempty = os.path.exists(overrides_path) and os.path.getsize(overrides_path) > 0
+    if (
+        current_hash == stored_hash
+        and os.path.exists(constraints_path)
+        and bool(override_files) == overrides_cache_nonempty
+    ):
         debug('Constraints are up to date')
         return constraints_path
 

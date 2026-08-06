@@ -22,13 +22,13 @@ def list_resources() -> List[types.Resource]:
             uri=_PIPELINES,
             name='Deployments',
             description='Deployments registered on the connected RocketRide server',
-            mimeType='application/json',
+            mime_type='application/json',
         ),
         types.Resource(
             uri=_STATUS,
             name='Server Status',
             description='Current RocketRide server status and running tasks',
-            mimeType='application/json',
+            mime_type='application/json',
         ),
     ]
 

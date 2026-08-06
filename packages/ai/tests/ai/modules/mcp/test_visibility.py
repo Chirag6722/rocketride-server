@@ -236,6 +236,9 @@ async def test_monitor_single_poll_timeout_returns_current_snapshot_not_hard_err
 
     assert result['ok'] is True
     assert result['terminal'] is False
+    # The marker is the only way a caller separates "the poll timed out"
+    # from "the engine reports state none".
+    assert result['poll_timed_out'] is True
     assert fake_engine.get_task_status_calls == ['tok-1']
     # Not terminal -- the token must remain registered.
     assert tasks.get('tok-1') is not None
