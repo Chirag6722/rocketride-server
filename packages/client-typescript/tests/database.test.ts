@@ -126,3 +126,32 @@ describe('DatabaseApi transactions', () => {
 		});
 	});
 });
+
+describe('DatabaseApi.query rowMode', () => {
+	it('forwards row_mode: array in the tool input', async () => {
+		const c = fakeClient();
+		c.tool.mockResolvedValueOnce({ rows: [[1, 'x']], affected_rows: 0 });
+		const db = new DatabaseApi(c);
+		const res = await db.query({ token: 't', sql: 'SELECT 1', rowMode: 'array' });
+		expect(c.tool).toHaveBeenCalledWith({
+			token: 't',
+			tool: 'execute',
+			nodeId: undefined,
+			input: { sql: 'SELECT 1', row_mode: 'array' },
+		});
+		expect(res.rows).toEqual([[1, 'x']]);
+	});
+
+	it('omits row_mode by default', async () => {
+		const c = fakeClient();
+		c.tool.mockResolvedValueOnce({ rows: [{ a: 1 }], affected_rows: 0 });
+		const db = new DatabaseApi(c);
+		await db.query({ token: 't', sql: 'SELECT 1' });
+		expect(c.tool).toHaveBeenCalledWith({
+			token: 't',
+			tool: 'execute',
+			nodeId: undefined,
+			input: { sql: 'SELECT 1' },
+		});
+	});
+});

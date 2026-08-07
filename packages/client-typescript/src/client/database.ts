@@ -45,8 +45,9 @@ import type { SequelizeConstructor } from './database/sequelize/create-sequelize
  * additions without forcing shim changes.
  */
 export interface DatabaseLike {
-	/** Execute a raw SQL statement. */
-	query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[] }): Promise<{ rows: Record<string, unknown>[]; affected_rows: number }>;
+	/** Execute a raw SQL statement. `rowMode: 'array'` returns positional rows. */
+	query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[]; rowMode: 'array' }): Promise<{ rows: unknown[][]; affected_rows: number }>;
+	query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[]; rowMode?: 'object' }): Promise<{ rows: Record<string, unknown>[]; affected_rows: number }>;
 	/** Begin a database transaction. */
 	beginTransaction(options: { token: string; nodeId?: string }): Promise<{ session_id: string }>;
 	/** Commit an open transaction. */
@@ -100,9 +101,15 @@ export class DatabaseApi {
 	 *   `beginTransaction`.  When provided the statement runs within that session.
 	 * @param options.params - Optional positional parameters bound to the statement
 	 *   (e.g. `[1, 'foo']` for `$1`, `$2` placeholders).
-	 * @returns Object with `rows` (array of row objects) and `affected_rows` (number).
+	 * @param options.rowMode - Row shape: `'object'` (default) returns rows as
+	 *   objects keyed by column name; `'array'` returns positional arrays
+	 *   (column order preserved, duplicate column names kept) — the shape ORM
+	 *   drivers such as Drizzle require.
+	 * @returns Object with `rows` (row objects, or positional arrays with `rowMode: 'array'`) and `affected_rows` (number).
 	 */
-	async query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[] }): Promise<{ rows: Record<string, unknown>[]; affected_rows: number }> {
+	async query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[]; rowMode: 'array' }): Promise<{ rows: unknown[][]; affected_rows: number }>;
+	async query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[]; rowMode?: 'object' }): Promise<{ rows: Record<string, unknown>[]; affected_rows: number }>;
+	async query(options: { token: string; sql: string; nodeId?: string; sessionId?: string; params?: unknown[]; rowMode?: 'object' | 'array' }): Promise<{ rows: unknown[][] | Record<string, unknown>[]; affected_rows: number }> {
 		if (typeof options.token !== 'string' || options.token.trim() === '') {
 			throw new Error('token must be a non-empty string');
 		}
@@ -113,6 +120,7 @@ export class DatabaseApi {
 		const input: Record<string, unknown> = { sql: options.sql };
 		if (options.sessionId) input.session_id = options.sessionId;
 		if (options.params) input.params = options.params;
+		if (options.rowMode === 'array') input.row_mode = 'array';
 
 		return this.client.tool({
 			token: options.token,
