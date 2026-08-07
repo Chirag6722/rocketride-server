@@ -31,18 +31,16 @@
  */
 
 import type { RocketRideClient } from './client.js';
-import { createSequelize } from './database/sequelize/create-sequelize.js';
-import type { SequelizeConstructor } from './database/sequelize/create-sequelize.js';
 
 // =============================================================================
-// DATABASE-LIKE INTERFACE (structural subset used by the pg shim)
+// DATABASE-LIKE INTERFACE (structural subset used by the Drizzle driver)
 // =============================================================================
 
 /**
- * Structural interface satisfied by `DatabaseApi` (and test doubles) for the
- * Sequelize pg-compatible shim.  Only the four methods the shim needs are
- * required, so the interface remains stable across future `DatabaseApi`
- * additions without forcing shim changes.
+ * Structural interface satisfied by `DatabaseApi` (and test doubles),
+ * consumed by the Drizzle-over-pipes driver (`rocketride/drizzle`).  Only the
+ * four methods the driver needs are required, so the interface remains stable
+ * across future `DatabaseApi` additions without forcing driver changes.
  */
 export interface DatabaseLike {
 	/** Execute a raw SQL statement. `rowMode: 'array'` returns positional rows. */
@@ -217,26 +215,5 @@ export class DatabaseApi {
 			throw new Error(`Unexpected dialect response from pipeline: ${JSON.stringify(result)}`);
 		}
 		return result.dialect as DatabaseDialect;
-	}
-
-	/**
-	 * Build a Sequelize ORM instance that transports its SQL over this RocketRide
-	 * pipe (via `query`/`beginTransaction`/`commit`/`rollback`) instead of a TCP socket.
-	 *
-	 * Passes `this` as the `DatabaseLike` transport — TypeScript confirms structural
-	 * compatibility at compile time.
-	 *
-	 * The `sequelize` package is a peer dependency, not a hard dependency: it pulls
-	 * in Node built-ins (`util`, `debug`) that cannot be bundled for browser targets.
-	 * Callers must import `Sequelize` themselves and pass the class in.
-	 *
-	 * @param options.Sequelize - The `Sequelize` class (`import { Sequelize } from 'sequelize'`).
-	 * @param options.token - Pipeline token for authentication.
-	 * @param options.nodeId - Target database node id (pins transactions to one node).
-	 * @param options.sequelizeOptions - Extra Sequelize options merged over the defaults.
-	 * @returns A configured `Sequelize` instance ready for model definition and queries.
-	 */
-	sequelize(options: { Sequelize: SequelizeConstructor; token: string; nodeId?: string; sequelizeOptions?: import('sequelize').Options }): import('sequelize').Sequelize {
-		return createSequelize({ Sequelize: options.Sequelize, db: this, token: options.token, nodeId: options.nodeId, sequelizeOptions: options.sequelizeOptions });
 	}
 }
