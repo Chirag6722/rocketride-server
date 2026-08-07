@@ -221,3 +221,31 @@ def test_commit_unknown_session_id_raises_value_error(instance_with_sqlite_regis
 def test_rollback_unknown_session_id_raises_value_error(instance_with_sqlite_registry):
     with pytest.raises(ValueError, match='unknown or expired transaction session'):
         instance_with_sqlite_registry.rollback({'session_id': 'no-such-session'})
+
+
+# ---------------------------------------------------------------------------
+# (e) row_mode='array' — positional rows for ORM clients (Drizzle)
+# ---------------------------------------------------------------------------
+
+
+def test_execute_tool_array_row_mode(instance_with_sqlite_registry):
+    inst = instance_with_sqlite_registry
+    inst.execute({'sql': "INSERT INTO t (id, v) VALUES (1, 'x')"})
+    inst.execute({'sql': "INSERT INTO t (id, v) VALUES (2, 'y')"})
+    result = inst.execute({'sql': 'SELECT id, v FROM t ORDER BY id', 'row_mode': 'array'})
+    assert result['rows'] == [[1, 'x'], [2, 'y']]
+    assert all(isinstance(r, list) for r in result['rows'])
+
+
+def test_execute_tool_session_array_row_mode(instance_with_sqlite_registry):
+    inst = instance_with_sqlite_registry
+    sid = inst.begin({})['session_id']
+    inst.execute({'sql': "INSERT INTO t (id, v) VALUES (1, 'x')", 'session_id': sid})
+    result = inst.execute({'sql': 'SELECT id, v FROM t ORDER BY id', 'session_id': sid, 'row_mode': 'array'})
+    inst.rollback({'session_id': sid})
+    assert result['rows'] == [[1, 'x']]
+
+
+def test_execute_tool_rejects_bad_row_mode(instance_with_sqlite_registry):
+    with pytest.raises(ValueError, match='row_mode'):
+        instance_with_sqlite_registry.execute({'sql': 'SELECT 1', 'row_mode': 'csv'})
