@@ -5,6 +5,7 @@ Three sides of one behaviour — audio_tts, video_composer, response.
 import base64
 import os
 import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -121,12 +122,41 @@ def test_response_announces_on_begin_before_any_bytes_exist():
     assert event == 'artifact_path'
     assert data['streaming'] is True
     assert data['path'].startswith('outputs/video/clip-')
-    assert 'url' not in data, 'a live artifact has no URL to sign yet'
+    assert data['url'] is None and data['live'] is False, 'no SFU configured => no live url'
 
     part, _ = live_media.spool_paths(CLIENT, data['path'])
     assert os.path.getsize(part) == 0
 
     node.writeVideo(AVI_ACTION.END, 'video/mp4', b'')
+
+
+def test_response_hands_a_whep_url_when_an_sfu_is_configured(monkeypatch):
+    """With an SFU set, the announce carries a WHEP url and each write is pushed live."""
+    monkeypatch.setenv('ROCKETRIDE_MEDIA_SFU', 'sfu.local')
+    fed = []
+
+    class _FakePublisher:
+        def __init__(self, host, stream_id, mime):
+            self.whep_url = f'http://{host}:8889/{stream_id}/whep'
+
+        def begin(self):
+            return True
+
+        def feed(self, data):
+            fed.append(data)
+
+        def finish(self):
+            fed.append('finish')
+
+    monkeypatch.setattr(sys.modules[ResponseNode.__module__], 'MediaPublisher', _FakePublisher)
+
+    node = _response(store=_Store())
+    _stream(node, 'video', 'video/mp4', [b'aa', b'bb'])
+
+    data = node.instance.sse[0][1]
+    assert data['live'] is True
+    assert data['url'].startswith('http://sfu.local:8889/clip-') and data['url'].endswith('/whep')
+    assert fed == [b'aa', b'bb', 'finish'], 'streamed live as it arrived, then closed'
 
 
 def test_response_spools_each_write_before_end():

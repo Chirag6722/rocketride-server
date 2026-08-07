@@ -30,6 +30,7 @@ import uuid
 
 from rocketlib import IInstanceBase, IJson, warning
 from ai.account.live_media import LiveWriter
+from ai.account.media_publish import MediaPublisher, sfu_host
 from ai.account.file_store import MAX_CHUNK_SIZE
 from ai.common.schema import Doc, Question, Answer
 from ai.common.avi.descriptor import descriptor_from_payload, source_media_detail
@@ -229,6 +230,8 @@ class IInstance(IInstanceBase):
         elif action == AVI_ACTION.WRITE:
             if entry := self._media.get(lane):
                 entry['writer'].append(data)
+                if publisher := entry.get('publisher'):
+                    publisher.feed(data)
 
         elif action == AVI_ACTION.END:
             entry = self._media.pop(lane, None)
@@ -245,19 +248,30 @@ class IInstance(IInstanceBase):
             self.instance.currentObject.response[key].append(result)
 
     def _begin_media(self, lane: str, mimeType: str) -> None:
-        """Open the spool and announce the artifact before its bytes exist."""
+        """Open the spool, start the live push, and announce the artifact before its bytes exist."""
         path = self._media_path(lane, mimeType)
         writer = LiveWriter(self.IGlobal.client_id or 'anonymous', path)
         writer.begin()
-        self._media[lane] = {'writer': writer, 'path': path, 'mime': mimeType}
+        entry = {'writer': writer, 'path': path, 'mime': mimeType, 'publisher': None}
 
-        # A live pull needs the server to resolve the same spool, keyed by account id.
+        # Live media-plane: push the stream to the SFU so the client pulls it over WHEP,
+        # never bytes over the control WS. No SFU configured => the spool path still stands.
+        host = sfu_host()
+        if self.IGlobal.transmit_media and host and mimeType.startswith(('audio/', 'video/')):
+            publisher = MediaPublisher(host, self._stream_id(path), mimeType)
+            if publisher.begin():
+                entry['publisher'] = publisher
+        self._media[lane] = entry
+
         if self.IGlobal.transmit_media and self.IGlobal.client_id:
-            self._announce_artifact(lane, mimeType, path)
+            publisher = entry['publisher']
+            self._announce_artifact(lane, mimeType, path, publisher.whep_url if publisher else None)
 
     def _end_media(self, lane: str, entry: dict) -> dict:
-        """Close and persist the spool. Discarded last: the base64 fallback reads it."""
+        """Close the live push and persist the spool. Discarded last: base64 fallback reads it."""
         writer, path, mime = entry['writer'], entry['path'], entry['mime']
+        if publisher := entry.get('publisher'):
+            publisher.finish()
         writer.finish()
         try:
             if self.IGlobal.file_store is not None:
@@ -301,8 +315,8 @@ class IInstance(IInstanceBase):
             warning(f'response: reading spool for {lane} failed: {e}')
             return b''
 
-    def _announce_artifact(self, kind: str, mime: str, path: str) -> None:
-        """Announce the artifact before it exists. The consumer pulls it over rrext_media."""
+    def _announce_artifact(self, kind: str, mime: str, path: str, url: str | None = None) -> None:
+        """Announce the artifact before it exists: a WHEP url for live, else the pull path."""
         try:
             self.instance.sendSSE(
                 'artifact_path',
@@ -311,9 +325,15 @@ class IInstance(IInstanceBase):
                 path=path,
                 name=path.rsplit('/', 1)[-1],
                 streaming=True,
+                url=url,
+                live=bool(url),
             )
         except Exception as e:
             warning(f'response: artifact_path SSE failed for {path!r}: {e}')
+
+    def _stream_id(self, path: str) -> str:
+        """SFU stream name: the media's basename without extension (already uuid-unique)."""
+        return os.path.splitext(os.path.basename(path))[0]
 
     def _media_path(self, kind: str, mime: str) -> str:
         """Unique logical FileStore path under ``outputs/<kind>/`` for this media."""
