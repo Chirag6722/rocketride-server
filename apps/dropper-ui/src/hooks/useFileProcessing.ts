@@ -304,6 +304,12 @@ export const useFileProcessing = (
 					const name = typeof data.name === 'string' ? data.name : 'media';
 					const mime = typeof data.mime_type === 'string' ? data.mime_type : undefined;
 					if (announcedPaths.current.has(path)) return;
+					// Live media-plane: the announce carries a WHEP url; the view opens the stream.
+					if (data.live === true && typeof data.url === 'string') {
+						announcedPaths.current.add(path);
+						setResults(prev => mergeArtifact(prev, kind, name, `whep:${data.url}`));
+						return;
+					}
 					try {
 						const content = await client.mediaPlaybackUrl(path, mime);
 						// Marked only on success: a live pull that fails is retried once the

@@ -4,7 +4,8 @@
  * See LICENSE file for details.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { openWhepStream } from 'rocketride';
 import { getClient } from '../hooks/clientSingleton';
 
 interface InlineMediaRendererProps {
@@ -12,6 +13,8 @@ interface InlineMediaRendererProps {
 	path?: string | undefined;
 	/** Pre-resolved data URI (base64 fallback — nothing to pull). */
 	directUrl?: string | undefined;
+	/** Live WHEP url — a WebRTC stream, attached via srcObject. */
+	whepUrl?: string | undefined;
 	mime?: string | undefined;
 	name?: string | undefined;
 }
@@ -25,14 +28,33 @@ const categoryOf = (mime?: string): 'audio' | 'video' | 'image' | undefined => {
 	return undefined;
 };
 
-/** Plays media produced by a pipeline, streaming it while the node still writes. */
-export const InlineMediaRenderer: React.FC<InlineMediaRendererProps> = ({ path, directUrl, mime, name }) => {
+/** Plays media produced by a pipeline: a live WHEP stream, or the produced file. */
+export const InlineMediaRenderer: React.FC<InlineMediaRendererProps> = ({ path, directUrl, whepUrl, mime, name }) => {
 	const label = name ?? path?.split('/').pop() ?? 'media';
 	const category = categoryOf(mime);
 	const [source, setSource] = useState<Source>(directUrl ? { kind: 'url', url: directUrl } : { kind: 'loading' });
 
+	// Live WHEP: open the WebRTC stream and attach it via srcObject.
+	const mediaRef = useRef<HTMLMediaElement | null>(null);
 	useEffect(() => {
-		if (directUrl || !path) return;
+		if (!whepUrl) return;
+		let closer: (() => void) | undefined;
+		let cancelled = false;
+		openWhepStream(whepUrl)
+			.then(({ stream, close }) => {
+				closer = close;
+				if (cancelled) return close();
+				if (mediaRef.current) mediaRef.current.srcObject = stream;
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+			closer?.();
+		};
+	}, [whepUrl]);
+
+	useEffect(() => {
+		if (whepUrl || directUrl || !path) return;
 		const client = getClient();
 		if (!client) {
 			setSource({ kind: 'error', message: 'Not connected — cannot load media.' });
@@ -56,7 +78,23 @@ export const InlineMediaRenderer: React.FC<InlineMediaRendererProps> = ({ path, 
 			cancelled = true;
 			if (objectUrl) URL.revokeObjectURL(objectUrl);
 		};
-	}, [path, directUrl, mime]);
+	}, [path, directUrl, whepUrl, mime]);
+
+	if (whepUrl) {
+		return (
+			<div className={`inline-media inline-media-${category ?? 'file'}`}>
+				{category === 'video' && (
+					<video ref={el => { mediaRef.current = el; }} className="inline-media-video" autoPlay muted playsInline controls />
+				)}
+				{category === 'audio' && (
+					<audio ref={el => { mediaRef.current = el; }} className="inline-media-audio" autoPlay muted playsInline controls />
+				)}
+				<div className="inline-media-footer">
+					<span className="inline-media-name">{label}</span>
+				</div>
+			</div>
+		);
+	}
 
 	if (source.kind === 'loading') {
 		return (

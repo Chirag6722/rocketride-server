@@ -98,6 +98,7 @@ export const useChatMessages = () => {
 					// The response node announces the artifact before its first byte exists.
 					if (type === 'artifact_path' && typeof data.path === 'string') {
 						announcedPaths.current.add(data.path);
+						const whepUrl = data.live === true && typeof data.url === 'string' ? data.url : undefined;
 						setMessages(prev => [...prev, {
 							id: Date.now(),
 							text: '',
@@ -105,7 +106,8 @@ export const useChatMessages = () => {
 							timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
 							filePath: data.path as string,
 							mediaMime: typeof data.mime_type === 'string' ? data.mime_type : undefined,
-							mediaName: typeof data.name === 'string' ? data.name : undefined
+							mediaName: typeof data.name === 'string' ? data.name : undefined,
+							whepUrl
 						}]);
 						return;
 					}

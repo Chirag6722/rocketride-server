@@ -55,10 +55,11 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
 			<div className="message-wrapper bot">
 				<div className={`message-bubble bot${hasChart ? ' has-chart' : ''}`}>
 					<div className="markdown-content">
-						{message.filePath || message.mediaUrl ? (
+						{message.filePath || message.mediaUrl || message.whepUrl ? (
 							<InlineMediaRenderer
 								path={message.filePath}
 								directUrl={message.mediaUrl}
+								whepUrl={message.whepUrl}
 								mime={message.mediaMime}
 								name={message.mediaName}
 							/>
