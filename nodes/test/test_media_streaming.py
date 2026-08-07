@@ -153,10 +153,15 @@ def test_response_hands_a_whep_url_when_an_sfu_is_configured(monkeypatch):
     node = _response(store=_Store())
     _stream(node, 'video', 'video/mp4', [b'aa', b'bb'])
 
-    data = node.instance.sse[0][1]
+    data = next(d for e, d in node.instance.sse if e == 'artifact_path')
     assert data['live'] is True
     assert data['url'].startswith('http://sfu.local:8889/clip-') and data['url'].endswith('/whep')
     assert fed == [b'aa', b'bb', 'finish'], 'streamed live as it arrived, then closed'
+
+    # observability: the push surfaces to the monitor as proof it went over WebRTC
+    mp = next(d for e, d in node.instance.sse if e == 'media_publish')
+    assert mp['transport'] == 'RTSP->WHEP'
+    assert mp['whep_url'].endswith('/whep') and mp['sfu'] == 'sfu.local'
 
 
 def test_response_spools_each_write_before_end():

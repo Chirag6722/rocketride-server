@@ -28,7 +28,7 @@ import asyncio
 import mimetypes
 import uuid
 
-from rocketlib import IInstanceBase, IJson, warning
+from rocketlib import IInstanceBase, IJson, warning, debug
 from ai.account.live_media import LiveWriter
 from ai.account.media_publish import MediaPublisher, sfu_host
 from ai.account.file_store import MAX_CHUNK_SIZE
@@ -258,14 +258,32 @@ class IInstance(IInstanceBase):
         # never bytes over the control WS. No SFU configured => the spool path still stands.
         host = sfu_host()
         if self.IGlobal.transmit_media and host and mimeType.startswith(('audio/', 'video/')):
-            publisher = MediaPublisher(host, self._stream_id(path), mimeType)
+            stream_id = self._stream_id(path)
+            publisher = MediaPublisher(host, stream_id, mimeType)
             if publisher.begin():
                 entry['publisher'] = publisher
+                self._trace_media_publish(lane, mimeType, host, stream_id, publisher.whep_url)
         self._media[lane] = entry
 
         if self.IGlobal.transmit_media and self.IGlobal.client_id:
             publisher = entry['publisher']
             self._announce_artifact(lane, mimeType, path, publisher.whep_url if publisher else None)
+
+    def _trace_media_publish(self, kind: str, mime: str, sfu: str, stream_id: str, whep_url: str) -> None:
+        """Surface the live push in the monitor (Flow/Trace + Log) as proof it went over WebRTC."""
+        try:
+            self.instance.sendSSE(
+                'media_publish',
+                kind=kind,
+                mime_type=mime,
+                stream_id=stream_id,
+                sfu=sfu,
+                whep_url=whep_url,
+                transport='RTSP->WHEP',
+            )
+        except Exception as e:
+            warning(f'response: media_publish trace failed: {e}')
+        debug(f'media-plane -> SFU: streaming {kind} ({mime}) as {stream_id} via WHEP {whep_url}')
 
     def _end_media(self, lane: str, entry: dict) -> dict:
         """Close the live push and persist the spool. Discarded last: base64 fallback reads it."""
