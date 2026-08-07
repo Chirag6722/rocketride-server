@@ -138,6 +138,7 @@ def test_response_hands_a_whep_url_when_an_sfu_is_configured(monkeypatch):
     class _FakePublisher:
         def __init__(self, host, stream_id, mime):
             self.whep_url = f'http://{host}:8889/{stream_id}/whep'
+            self.failed = False
 
         def begin(self):
             return True

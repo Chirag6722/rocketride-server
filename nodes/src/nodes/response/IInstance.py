@@ -290,6 +290,10 @@ class IInstance(IInstanceBase):
         writer, path, mime = entry['writer'], entry['path'], entry['mime']
         if publisher := entry.get('publisher'):
             publisher.finish()
+            if publisher.failed:
+                warning(
+                    f'response: media-plane push died for {mime}; client falls back to storage. ffmpeg: {publisher.stderr_tail}'
+                )
         writer.finish()
         try:
             if self.IGlobal.file_store is not None:

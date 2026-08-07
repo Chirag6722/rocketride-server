@@ -31,3 +31,24 @@ def test_sfu_host_reads_env(monkeypatch):
     assert sfu_host() is None
     monkeypatch.setenv('ROCKETRIDE_MEDIA_SFU', 'lab.local')
     assert sfu_host() == 'lab.local'
+
+
+def test_feed_swallows_write_to_closed_stdin():
+    # An encoder that died (RTSP refused) closes its stdin: feed must degrade, not raise.
+    class _DeadStdin:
+        closed = False
+
+        def write(self, data):
+            raise ValueError('write to closed file')
+
+        def flush(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    pub = MediaPublisher('sfu.local', 'clip', 'video/mp4')
+    pub._proc = type('P', (), {'stdin': _DeadStdin()})()
+    pub.feed(b'frame')  # must not raise
+    assert pub.failed is True
+    pub.feed(b'more')  # dead publisher is a silent no-op

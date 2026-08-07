@@ -45,11 +45,22 @@ class MediaPublisher:
         self._mime = mime or ''
         self._proc = None
         self._stderr_tail = b''
+        self._dead = False
 
     @property
     def whep_url(self) -> str:
         """Where the client pulls this stream (MediaMTX re-exposes the RTSP as WHEP)."""
         return f'http://{self._host}:{_WHEP_PORT}/{self._id}/whep'
+
+    @property
+    def failed(self) -> bool:
+        """True once the encoder died mid-stream; diagnose the cause via stderr_tail."""
+        return self._dead
+
+    @property
+    def stderr_tail(self) -> str:
+        """The tail of ffmpeg's diagnostics (e.g. 'Connection refused'), decoded lossily."""
+        return self._stderr_tail.decode('utf-8', 'replace').strip()
 
     def _cmd(self):
         """Ffmpeg argv: copy H.264 video as-is; transcode audio to Opus (WebRTC needs it)."""
@@ -96,13 +107,15 @@ class MediaPublisher:
         return True
 
     def feed(self, data: bytes) -> None:
-        """Push one chunk. A dead encoder ends the stream, it never raises."""
-        if self._proc is None or not data:
+        """Push one chunk. Once the encoder dies it becomes a no-op, never raising."""
+        if self._proc is None or self._dead or not data:
             return
         try:
             self._proc.stdin.write(data)
             self._proc.stdin.flush()
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError, ValueError):
+            # Encoder died (RTSP refused, bad codec): stop feeding, media falls back to the spool.
+            self._dead = True
             self._close_stdin()
 
     def finish(self) -> None:
