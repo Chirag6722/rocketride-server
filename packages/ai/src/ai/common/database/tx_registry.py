@@ -57,12 +57,20 @@ def to_sqlalchemy_text(sql: str, params: list | None) -> tuple[TextClause, dict]
     return text(_PLACEHOLDER.sub(_sub, sql)), binds
 
 
-def shape_execute_result(result, max_rows: int) -> dict | None:
-    """Shape a SQLAlchemy result into ``{'rows', 'affected_rows'}`` (or None)."""
+def shape_execute_result(result, max_rows: int, row_mode: str = 'object') -> dict | None:
+    """Shape a SQLAlchemy result into ``{'rows', 'affected_rows'}`` (or None).
+
+    ``row_mode='array'`` returns each row as a positional list (column order =
+    ``result.keys()``) instead of a dict — required by ORM clients (Drizzle)
+    whose result mappers key columns by position, where dict rows would
+    silently collapse duplicate column names in joins.
+    """
     if result.returns_rows:
         rows = result.fetchmany(max_rows + 1)
         if len(rows) > max_rows:
             return None
+        if row_mode == 'array':
+            return {'rows': [list(row) for row in rows], 'affected_rows': 0}
         cols = result.keys()
         return {'rows': [dict(zip(cols, row)) for row in rows], 'affected_rows': 0}
     rc = result.rowcount
@@ -114,7 +122,7 @@ class TransactionRegistry:
                 raise
             return sid
 
-    def execute(self, session_id: str, sql: str, params: list | None = None) -> dict:
+    def execute(self, session_id: str, sql: str, params: list | None = None, row_mode: str = 'object') -> dict:
         """Run SQL on the held connection; refresh last_used; return shaped result.
 
         Note: on a max_rows RuntimeError the session remains open; the caller
@@ -131,7 +139,7 @@ class TransactionRegistry:
             clause, binds = to_sqlalchemy_text(sql, params)
             result = held.conn.execute(clause, binds)
             held.last_used = self._clock()
-            shaped = shape_execute_result(result, self._max_rows)
+            shaped = shape_execute_result(result, self._max_rows, row_mode)
             if shaped is None:
                 raise RuntimeError(f'query exceeded max_rows={self._max_rows}')
             return shaped

@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 import pytest
-from ai.common.database.tx_registry import TransactionRegistry, to_sqlalchemy_text
+from ai.common.database.tx_registry import TransactionRegistry, shape_execute_result, to_sqlalchemy_text
 
 
 def _engine_shared():
@@ -186,3 +186,36 @@ def test_global_creates_and_closes_registry():
     mock_registry.close_all.assert_called_once()
     mock_engine.dispose.assert_called_once()
     assert call_order == ['close_all', 'dispose'], f'Expected close_all before dispose, got: {call_order}'
+
+
+def _engine_with_rows():
+    e = _engine_shared()
+    with e.begin() as c:
+        c.execute(text("INSERT INTO t (id, v) VALUES (1, 'x'), (2, 'y')"))
+    return e
+
+
+def test_shape_execute_result_array_mode():
+    engine = _engine_with_rows()
+    with engine.connect() as conn:
+        result = conn.execute(text('SELECT id, v FROM t ORDER BY id'))
+        shaped = shape_execute_result(result, 10, row_mode='array')
+    assert shaped == {'rows': [[1, 'x'], [2, 'y']], 'affected_rows': 0}
+
+
+def test_shape_execute_result_default_stays_object():
+    engine = _engine_with_rows()
+    with engine.connect() as conn:
+        result = conn.execute(text('SELECT id, v FROM t ORDER BY id'))
+        shaped = shape_execute_result(result, 10)
+    assert shaped == {'rows': [{'id': 1, 'v': 'x'}, {'id': 2, 'v': 'y'}], 'affected_rows': 0}
+
+
+def test_registry_execute_array_mode():
+    reg = TransactionRegistry(_engine_with_rows(), max_rows=100)
+    sid = reg.begin()
+    try:
+        shaped = reg.execute(sid, 'SELECT id, v FROM t ORDER BY id', row_mode='array')
+        assert shaped['rows'] == [[1, 'x'], [2, 'y']]
+    finally:
+        reg.rollback(sid)
