@@ -165,6 +165,15 @@ def test_response_hands_a_whep_url_when_an_sfu_is_configured(monkeypatch):
     assert mp['whep_url'].endswith('/whep') and mp['sfu'] == 'sfu.local'
 
 
+def test_stream_id_is_url_safe():
+    # Spaces/accents in the source name must not leak into the WHEP url or RTSP path.
+    node = _response()
+    assert node._stream_id('/spool/Game Intro Zylphidia-c97a9458.mp4') == 'Game-Intro-Zylphidia-c97a9458'
+    assert node._stream_id('/spool/clean-id.mp4') == 'clean-id'
+    sid = node._stream_id('/spool/café tést.webm')
+    assert ' ' not in sid and '/' not in sid
+
+
 def test_response_spools_each_write_before_end():
     """Another process can read the bytes as they arrive, not at END."""
     node = _response(store=_Store())

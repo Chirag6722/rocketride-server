@@ -23,6 +23,7 @@
 
 from typing import List
 import os
+import re
 import base64
 import asyncio
 import mimetypes
@@ -354,8 +355,9 @@ class IInstance(IInstanceBase):
             warning(f'response: artifact_path SSE failed for {path!r}: {e}')
 
     def _stream_id(self, path: str) -> str:
-        """SFU stream name: the media's basename without extension (already uuid-unique)."""
-        return os.path.splitext(os.path.basename(path))[0]
+        """SFU stream name: a url-safe slug of the basename, so spaces/accents can't break the WHEP url."""
+        base = os.path.splitext(os.path.basename(path))[0]
+        return re.sub(r'[^A-Za-z0-9._-]+', '-', base).strip('-') or 'stream'
 
     def _media_path(self, kind: str, mime: str) -> str:
         """Unique logical FileStore path under ``outputs/<kind>/`` for this media."""
