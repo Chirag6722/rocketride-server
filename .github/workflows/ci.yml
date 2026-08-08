@@ -233,6 +233,13 @@ jobs:
         with:
           node-version: 22
       # Dependency-free (node:fs + node:path only), so no install step.
+      #
+      # The gate's own regression test runs FIRST and in the same job. A gate
+      # that has quietly stopped detecting anything still exits 0, so the test
+      # is the only thing standing between "green" and "green and meaningless".
+      # Running it here rather than in a job of its own keeps the two from
+      # drifting apart — you cannot end up running the gate without its test.
+      - run: node --test .github/scripts/check-readme-sources.test.mjs
       - run: node .github/scripts/check-readme-sources.mjs
 
   # ---------------------------------------------------------------------------
@@ -316,7 +323,7 @@ jobs:
   # ---------------------------------------------------------------------------
   ci-ok:
     name: CI OK
-    needs: [init, changes, build, helm-changes, helm-lint, ruff-check, gitleaks, shell-contract]
+    needs: [init, changes, build, helm-changes, helm-lint, ruff-check, gitleaks, shell-contract, readme-sources]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -324,11 +331,11 @@ jobs:
         run: |
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
             echo "❌ One or more CI jobs failed or were cancelled."
-            echo "Results: init=${{ needs.init.result }}, changes=${{ needs.changes.result }}, build=${{ needs.build.result }}, helm-changes=${{ needs.helm-changes.result }}, helm-lint=${{ needs.helm-lint.result }}, ruff-check=${{ needs['ruff-check'].result }}, gitleaks=${{ needs.gitleaks.result }}, shell-contract=${{ needs['shell-contract'].result }}"
+            echo "Results: init=${{ needs.init.result }}, changes=${{ needs.changes.result }}, build=${{ needs.build.result }}, helm-changes=${{ needs.helm-changes.result }}, helm-lint=${{ needs.helm-lint.result }}, ruff-check=${{ needs['ruff-check'].result }}, gitleaks=${{ needs.gitleaks.result }}, shell-contract=${{ needs['shell-contract'].result }}, readme-sources=${{ needs['readme-sources'].result }}"
             exit 1
           fi
           echo "✅ All CI checks passed (or were correctly skipped)."
-          echo "Results: init=${{ needs.init.result }}, changes=${{ needs.changes.result }}, build=${{ needs.build.result }}, helm-changes=${{ needs.helm-changes.result }}, helm-lint=${{ needs.helm-lint.result }}, ruff-check=${{ needs['ruff-check'].result }}, gitleaks=${{ needs.gitleaks.result }}, shell-contract=${{ needs['shell-contract'].result }}"
+          echo "Results: init=${{ needs.init.result }}, changes=${{ needs.changes.result }}, build=${{ needs.build.result }}, helm-changes=${{ needs.helm-changes.result }}, helm-lint=${{ needs.helm-lint.result }}, ruff-check=${{ needs['ruff-check'].result }}, gitleaks=${{ needs.gitleaks.result }}, shell-contract=${{ needs['shell-contract'].result }}, readme-sources=${{ needs['readme-sources'].result }}"
 
   # ---------------------------------------------------------------------------
   #  Discord — update PR embed with final check counts after CI completes.

@@ -33,7 +33,12 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, dirname, resolve, basename } from 'node:path';
 
-const ROOT = resolve(import.meta.dirname, '..', '..');
+// The repo root by default. README_GATE_ROOT overrides it so the regression
+// test can point the gate at a fixture tree — a gate with no test of its own is
+// the thing it was written to prevent, one level up.
+const ROOT = process.env.README_GATE_ROOT
+  ? resolve(process.env.README_GATE_ROOT)
+  : resolve(import.meta.dirname, '..', '..');
 const problems = [];
 
 /** Directories that may contain a package with a generated README. */
@@ -120,12 +125,40 @@ for (const docFile of [...sources].sort()) {
     }
   });
 
+  // Reference-style definitions: `[label]: ./path` on its own line, used far
+  // from the `[text][label]` that consumes it. The inline LINK pattern above
+  // cannot see these at all, so without this they were the one relative-link
+  // form the gate silently allowed — the exact class it exists to catch.
+  // Requires start-of-line so a `[x]: y` inside prose or a code fence is not
+  // mistaken for a definition.
+  lines.forEach((line, i) => {
+    const match = line.match(/^\s{0,3}\[[^\]^]+\]:\s*(\S+)/);
+    if (match && !ABSOLUTE.test(match[1])) {
+      problems.push(
+        `${rel}:${i + 1}: reference-style link target "${match[1]}" is ` +
+          `relative — registries resolve it against themselves, not GitHub. ` +
+          `Use an absolute URL.`
+      );
+    }
+  });
+
   // Bare <img src="..."> too — HTML is common in badge rows and PyPI sanitises
   // it inconsistently, but a relative src is broken everywhere regardless.
   for (const match of text.matchAll(/<img\s[^>]*src=["']([^"']+)["']/gi)) {
     if (!ABSOLUTE.test(match[1])) {
       problems.push(
         `${rel}: <img src="${match[1]}"> is relative — use an absolute URL`
+      );
+    }
+  }
+
+  // <a href="..."> for the same reason as <img>. Badge rows routinely wrap an
+  // image in a link, so a repo can pass the <img> check and still ship a
+  // relative anchor beside it.
+  for (const match of text.matchAll(/<a\s[^>]*href=["']([^"']+)["']/gi)) {
+    if (!ABSOLUTE.test(match[1])) {
+      problems.push(
+        `${rel}: <a href="${match[1]}"> is relative — use an absolute URL`
       );
     }
   }
