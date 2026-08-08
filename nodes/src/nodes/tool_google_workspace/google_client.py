@@ -147,6 +147,50 @@ def resolve_token_uri(svc: GoogleService, token_uri: object) -> str:
     return token_uri
 
 
+class GoogleApiError(ValueError):
+    """A failed Google API call, carrying the structured reason Google returned.
+
+    Subclasses ``ValueError`` deliberately: ``execute()`` has always raised
+    ``ValueError`` and callers catch it, so this stays backward-compatible
+    while giving them something to read.
+
+    Exists because the structured reason was being thrown away. ``execute()``
+    wrapped ``HttpError`` in a plain ``ValueError``, so by the time a caller
+    looked, ``getattr(exc, 'reason')`` found nothing — the word that names the
+    fix (``accessNotConfigured`` = the API is switched off in the project,
+    versus ``insufficientPermissions`` = wrong scopes) survived only inside a
+    prose message. Two different problems, two different fixes, one
+    indistinguishable string.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, reason: str | None = None):
+        super().__init__(message)
+        self.status = status
+        self.reason = reason
+
+
+def _error_reason(exc: Exception) -> str | None:
+    """First ``error.errors[].reason`` from a Google error body, if there is one.
+
+    Same body shape ``_is_rate_limit_403`` already parses. Returns None rather
+    than guessing when the body is absent, non-JSON, or carries no reason —
+    an absent reason must not read as a diagnosis.
+    """
+    content = getattr(exc, 'content', b'') or b''
+    if isinstance(content, bytes):
+        content = content.decode('utf-8', 'replace')
+    try:
+        errors = (json.loads(content).get('error') or {}).get('errors') or []
+        for item in errors:
+            if isinstance(item, dict) and item.get('reason'):
+                return str(item['reason'])
+    except (ValueError, AttributeError, TypeError):
+        pass
+    # googleapiclient sets .reason on HttpError itself; fall back to it.
+    direct = getattr(exc, 'reason', None)
+    return str(direct) if direct else None
+
+
 def _is_rate_limit_403(exc: Exception) -> bool:
     """True when a 403 is a transient rate/quota limit (safe to retry) vs a permission error."""
     status = getattr(getattr(exc, 'resp', None), 'status', None)
@@ -417,12 +461,18 @@ def execute(svc: GoogleService, request: Any, *, binary: bool = False) -> Any:
                 _time.sleep(base_delay * (2**attempt))
                 continue
             detail = getattr(exc, 'reason', None) or str(exc)
+            # Parse the structured reason HERE, while the HttpError is still in
+            # hand. Once we wrap it, the body is gone from the caller's view.
+            reason = _error_reason(exc)
+            code = int(status) if status else None
             if status and int(status) == 403:
-                raise ValueError(
+                raise GoogleApiError(
                     f'{svc.product} API 403: {detail}. If this is a scope error, disconnect '
                     'and reconnect your Google account with the required access tier. If it is a '
-                    'sharing/ownership error, the account may lack permission on that resource.'
+                    'sharing/ownership error, the account may lack permission on that resource.',
+                    status=code,
+                    reason=reason,
                 ) from exc
             prefix = f'{svc.product} API {status}: ' if status else f'{svc.product} request failed: '
-            raise ValueError(f'{prefix}{detail}') from exc
+            raise GoogleApiError(f'{prefix}{detail}', status=code, reason=reason) from exc
     raise RuntimeError('execute: retry loop exhausted unexpectedly')  # unreachable

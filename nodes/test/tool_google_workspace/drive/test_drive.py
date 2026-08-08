@@ -742,6 +742,78 @@ def test_check_connection_reports_ok():
     assert any('drive' in s for s in out['requiredScopes'])
 
 
+class _FakeHttpError(Exception):
+    """Shaped like googleapiclient.errors.HttpError: ``.resp.status`` + ``.content``.
+
+    The real ``execute()`` reads exactly those two, so a fake carrying them
+    travels the same code path a live 403 does.
+    """
+
+    def __init__(self, status: int, body: dict):
+        super().__init__(f'{status} {body.get("error", {}).get("message", "")}')
+        self.resp = types.SimpleNamespace(status=status)
+        self.content = json.dumps(body).encode()
+
+
+def test_check_connection_probe_failure_reports_error_and_reason():
+    """A failing probe must flip connection_ok AND name the reason.
+
+    This is the branch the whole PR exists for and it was the one branch with
+    no test: the success path and the no-probe ``unknown`` path were covered,
+    the failure path was not.
+
+    ``accessNotConfigured`` (the Drive API is switched off in the project) and
+    ``insufficientPermissions`` (wrong scopes) are different problems with
+    different fixes. Reporting only ``connection_ok: false`` sends the reader
+    to re-authenticate when the real answer is "enable the API" — which is
+    exactly what happened in #1694.
+
+    The failure is injected at the TRANSPORT (the fake request's ``execute()``),
+    not by replacing ``execute()`` itself. That distinction is the test: stubbing
+    ``execute`` would skip the very wrapper that has to preserve the reason, and
+    the test would pass while proving nothing.
+    """
+    err = _FakeHttpError(
+        403,
+        {
+            'error': {
+                'code': 403,
+                'message': 'Google Drive API has not been used in project 123 before or it is disabled.',
+                'errors': [{'reason': 'accessNotConfigured', 'message': 'Access Not Configured.'}],
+            }
+        },
+    )
+    # check_connection's probe is about().get(...), whose terminal method is 'get'.
+    inst = _make(results={'get': err})
+
+    out = inst.check_connection({})
+
+    assert out['connection_ok'] is False
+    assert out['error']
+    # The probe was attempted but must NOT be claimed as checked — a failed
+    # check is not a completed one.
+    assert 'api' not in out['checked']
+    # The point of the fix: the structured reason survives execute()'s wrapper.
+    assert out.get('errorReason') == 'accessNotConfigured'
+
+
+def test_check_connection_probe_failure_without_reason_omits_the_field():
+    """No structured reason means no ``errorReason`` — absence beats a guess.
+
+    A transport error carries no Google error body. Emitting an empty or
+    invented reason would be worse than omitting it: the field is read as a
+    diagnosis, so it must appear only when Google actually supplied one.
+    """
+    inst = _make(results={'get': ConnectionError('connection reset by peer')})
+
+    out = inst.check_connection({})
+
+    assert out['connection_ok'] is False
+    assert out['error']
+    assert 'api' not in out['checked']
+    assert 'errorReason' not in out
+
+
 # ---------------------------------------------------------------------------
 # Error mapping
 # ---------------------------------------------------------------------------
