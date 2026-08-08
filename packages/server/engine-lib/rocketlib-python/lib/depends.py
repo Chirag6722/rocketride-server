@@ -650,8 +650,27 @@ def _find_requirement_files() -> list[str]:
 
 
 def _compute_hash(file_paths: list[str]) -> str:
-    """Compute a fast hash from file metadata (mtime + size)."""
+    """Compute a fast hash from file metadata (mtime + size) AND the resolve mode.
+
+    The resolve mode is part of the key because it changes the OUTPUT for
+    identical inputs: with ``ROCKETRIDE_CPU_ONLY_DEPS`` set, the combined
+    requirements gain a ``--extra-index-url .../cpu`` line and resolve to the
+    CPU ``torch`` instead of the CUDA one. Hashing only the requirement files
+    would make the flag a no-op on any host that already built
+    ``constraints.txt`` — the early return in ``ensure_constraints()`` fires,
+    ``_combine_requirements()`` never re-runs, and the resolve stays CUDA while
+    reporting success. Unsetting the flag afterwards would likewise fail to
+    restore GPU.
+
+    Worse, ``_write_excludes_file()`` is rewritten on every call and *does*
+    honour the flag, so a stale cache lets the two disagree: excludes saying
+    ``onnxruntime-gpu`` while constraints still pin CUDA ``torch``.
+
+    Seeding here rather than at the call site keeps the invariant with the
+    thing it protects — any future caller inherits it.
+    """
     hasher = hashlib.md5()
+    hasher.update(f'cpu_only={_cpu_only()}\n'.encode())
     for path in sorted(file_paths):
         stat = os.stat(path)
         entry = f'{path}:{stat.st_size}:{stat.st_mtime_ns}\n'
