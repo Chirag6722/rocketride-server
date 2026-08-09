@@ -1,9 +1,13 @@
-# File Explorer
+# RocketRide File Explorer
 
 Browse, preview, and edit the files stored on your RocketRide server — right
 inside the shell. Open anything from source code to spreadsheets, video, and
 PDFs in a familiar tabbed, split-pane workspace, with the right viewer chosen
 automatically for each file type.
+
+<p align="center">
+  <img src="./assets/screenshot.png" alt="RocketRide File Explorer" width="900">
+</p>
 
 ---
 
