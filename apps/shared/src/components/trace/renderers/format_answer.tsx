@@ -4,7 +4,7 @@
 
 import { ReactElement } from 'react';
 import { RS } from './styles';
-import { JsonTree } from '../JsonTree';
+import { JsonTree } from '../../json-tree';
 
 export interface AnswerFields {
 	answer?: string | Record<string, unknown> | unknown[];
