@@ -4,6 +4,10 @@ Watch the live stream of engine events in real time — subscribe to the event
 categories you care about, inspect any event's full JSON payload, and export the
 capture, all from one dashboard.
 
+<p align="center">
+  <img src="./assets/screenshot.png" alt="RocketRide Event Monitor" width="900">
+</p>
+
 ---
 
 ## What it does
