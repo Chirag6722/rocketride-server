@@ -991,6 +991,13 @@ class TestToolGroupsField:
     def test_default_selection_matches_the_code_default(self):
         assert set(self.field['default']) == DEFAULT_GROUPS
 
+    def test_readme_states_the_real_default_tool_count(self):
+        """The README quotes the default selection's size; regrouping a tool must not leave it stale."""
+        readme = (Path(__file__).resolve().parents[2] / 'src' / 'nodes' / 'tool_pipedrive' / 'README.md').read_text(
+            encoding='utf-8'
+        )
+        assert f'default eight groups publish {published_tool_count(DEFAULT_GROUPS)} tools' in readme
+
     def test_all_option_advertises_the_full_surface(self):
         labels = {option[0]: option[1] for option in self.field['items']['enum']}
         total = sum(tool_counts_by_group().values()) + 1  # + the request escape hatch
