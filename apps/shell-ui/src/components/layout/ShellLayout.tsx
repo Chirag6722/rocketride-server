@@ -474,11 +474,21 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
 								</div>
 							</div>
 						) : appLoading || !activeApp ? (
-							// Same bobbing rocket as the boot LoadingScreen and home-ui's
+							// Same bob as the boot LoadingScreen and home-ui's
 							// AuthTransitionPage (all phase-anchored) so the post-login
 							// boot → app-load → transition handoff is one continuous animation
 							// with no "Loading…" text frame flashing between them.
-							<LoadingScreen />
+							//
+							// It bobs the icon of the app being loaded, taken from the
+							// manifest — which is known before the remote arrives, since
+							// that is the whole point of the manifest. What is being waited
+							// for is the app; the platform mark would make every app's load
+							// look like every other's. Falls back to the rocket when the
+							// manifest has no icon, which is also the boot case.
+							<LoadingScreen
+								iconUrl={activeManifest?.icon}
+								iconAlt={activeManifest?.name ?? ''}
+							/>
 						) : null}
 					</div>
 				</div>
