@@ -23,8 +23,8 @@
 // =============================================================================
 // FROZEN shell-api contract — ShellApiV0 — never edit by hand
 // =============================================================================
-// Generated:     2026-08-07T07:09:39.400Z
-// Source commit: 02eb2375d7963391ae0f6cb8426226affdb0adff
+// Generated:     2026-08-10T15:20:25.899Z
+// Source commit: a1beeb3e49460be2614c8f822d4f33ade99dd342
 // Generator:     dts-bundle-generator@9.5.1
 // Produced by:   ./builder shell:freeze
 // =============================================================================
@@ -4857,7 +4857,7 @@ export declare class RocketRideClient extends DAPClient {
         file: File;
         objinfo?: Record<string, unknown>;
         mimetype?: string;
-    }>, token: string): Promise<UPLOAD_RESULT[]>;
+    }>, token: string, maxConcurrent?: number, onSSE?: (type: string, data: Record<string, unknown>) => Promise<void>): Promise<UPLOAD_RESULT[]>;
     /**
      * Ask a question to RocketRide's AI and get an intelligent response.
      */
@@ -5241,6 +5241,67 @@ export declare class RocketRideClient extends DAPClient {
         state: string;
         deployedAt?: number;
     }>>;
+    /**
+     * Open a produced media artifact for reading over the reliable DAP channel.
+     *
+     * Unlike {@link fsOpen}, this requires only `task.data` (the same permission
+     * that receives the `artifact_path` announcement) and is restricted to the
+     * `outputs/` prefix server-side — so a consumer without `task.store` can pull
+     * its own produced media.
+     *
+     * @param path - Artifact path from the `artifact_path` SSE event (under `outputs/`)
+     * @returns `handle`, the bytes available *so far*, and whether the producer finished
+     */
+    mediaOpen(path: string): Promise<{
+        handle: string;
+        size: number;
+        complete: boolean;
+    }>;
+    /**
+     * Read one chunk from an open media handle.
+     *
+     * Waits for the producing node: empty bytes always mean the stream ended.
+     *
+     * @param handle - Handle from {@link mediaOpen}
+     * @param offset - Byte offset to read from
+     * @param length - Max bytes to read (default and max 4 MiB)
+     * @returns The bytes read, and whether the producer has finished
+     */
+    mediaRead(handle: string, offset?: number, length?: number): Promise<{
+        data: Uint8Array;
+        complete: boolean;
+    }>;
+    /** Close a media read handle. */
+    mediaClose(handle: string): Promise<void>;
+    /**
+     * Pull a produced media artifact chunk by chunk, yielding each as it arrives.
+     *
+     * Each read blocks server-side until bytes exist; stops at the first empty chunk.
+     *
+     * @param path - Artifact path from the `artifact_path` SSE event
+     */
+    mediaChunks(path: string): AsyncGenerator<Uint8Array, void, void>;
+    /**
+     * Pull a produced media artifact and reassemble it into a Blob.
+     *
+     * Waits for the whole artifact; prefer {@link mediaPlaybackUrl} for playback.
+     *
+     * @param path - Artifact path from the `artifact_path` SSE event
+     * @param mime - MIME type to stamp on the Blob (from the same event)
+     */
+    mediaFetchBlob(path: string, mime?: string): Promise<Blob>;
+    /**
+     * A `src` for an `<audio>`/`<video>` element that plays while the media is
+     * still being produced.
+     *
+     * Reads the first chunk before deciding: for MP4 the codec lives in the init segment.
+     * A browser that cannot play it progressively gets the whole artifact as a Blob.
+     * Revoke the returned URL when the element goes away.
+     *
+     * @param path - Artifact path from the `artifact_path` SSE event
+     * @param mime - MIME type from the same event
+     */
+    mediaPlaybackUrl(path: string, mime?: string): Promise<string>;
     /** Read a file as a UTF-8 string. */
     fsReadString(path: string): Promise<string>;
     /** Write a UTF-8 string to a file. */
@@ -5503,6 +5564,39 @@ export declare class RocketRideClient extends DAPClient {
         timeout?: number;
     }): Promise<T>;
 }
+/**
+ * MIT License
+ *
+ * Copyright (c) 2026 Aparavi Software AG
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+/** A live WHEP stream: the media, and a closer that tears the connection down. */
+export interface WhepStream {
+    stream: MediaStream;
+    close: () => void;
+}
+/**
+ * Open a live WHEP egress stream: POST an SDP offer to `url`, play the answer's tracks.
+ * The engine pushed this media to the SFU; the client pulls it here, never over the WS.
+ */
+export declare function openWhepStream(url: string): Promise<WhepStream>;
 interface ShellConnectionState {
     /** The shared RocketRideClient instance, or `null` if not yet initialised. */
     client: RocketRideClient | null;

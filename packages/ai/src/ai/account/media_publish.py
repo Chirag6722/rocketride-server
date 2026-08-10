@@ -22,8 +22,15 @@ _FINISH_TIMEOUT = 30
 
 
 def sfu_host():
-    """The configured SFU host, or None when the live media-plane is off."""
-    return os.environ.get(_SFU_ENV) or None
+    """The SFU host: an explicit ROCKETRIDE_MEDIA_SFU (external SFU) wins; otherwise the
+    engine downloads and runs its own MediaMTX and returns its LAN host (None if that fails).
+    """
+    external = os.environ.get(_SFU_ENV)
+    if external:
+        return external
+    from ai.account.sfu import ensure_managed_sfu
+
+    return ensure_managed_sfu()
 
 
 def _ffmpeg_exe():

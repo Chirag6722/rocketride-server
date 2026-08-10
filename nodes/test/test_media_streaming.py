@@ -23,6 +23,7 @@ CLIENT = 'user-1'
 @pytest.fixture(autouse=True)
 def spool_dir(tmp_path, monkeypatch):
     monkeypatch.setenv('ROCKETRIDE_LIVE_MEDIA_DIR', str(tmp_path))
+    monkeypatch.setattr('ai.account.sfu.ensure_managed_sfu', lambda: None)  # no managed SFU boot in unit tests
     yield tmp_path
 
 

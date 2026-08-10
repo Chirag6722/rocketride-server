@@ -26,11 +26,17 @@ def test_image_is_not_a_live_stream():
     assert MediaPublisher('h', 'i1', 'image/png')._cmd() is None
 
 
-def test_sfu_host_reads_env(monkeypatch):
-    monkeypatch.delenv('ROCKETRIDE_MEDIA_SFU', raising=False)
-    assert sfu_host() is None
+def test_sfu_host_prefers_explicit_env(monkeypatch):
     monkeypatch.setenv('ROCKETRIDE_MEDIA_SFU', 'lab.local')
-    assert sfu_host() == 'lab.local'
+    assert sfu_host() == 'lab.local'  # external SFU wins, no managed boot
+
+
+def test_sfu_host_falls_back_to_managed(monkeypatch):
+    monkeypatch.delenv('ROCKETRIDE_MEDIA_SFU', raising=False)
+    import ai.account.sfu as sfu
+
+    monkeypatch.setattr(sfu, 'ensure_managed_sfu', lambda: '10.0.0.9')
+    assert sfu_host() == '10.0.0.9'
 
 
 def test_feed_swallows_write_to_closed_stdin():
