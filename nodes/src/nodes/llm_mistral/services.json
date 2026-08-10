@@ -123,8 +123,8 @@
 				"title": "Mistral: Devstral 2 2512",
 				"model": "devstral-2512",
 				"modelSource": "provider",
-				"modelTotalTokens": 262144, // openrouter
-				"modelOutputTokens": 256000, // litellm
+				"modelTotalTokens": 262144, // manual
+				"modelOutputTokens": 256000, // manual
 				"apikey": ""
 			},
 			"devstral-latest": {
@@ -362,7 +362,7 @@
 				"model": "mistral-small-3.2-24b-instruct",
 				"modelSource": "openrouter",
 				"modelTotalTokens": 256000, // openrouter
-				"modelOutputTokens": 4096, // default
+				"modelOutputTokens": 16384, // openrouter
 				"apikey": ""
 			}
 		}

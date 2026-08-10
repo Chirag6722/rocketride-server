@@ -308,6 +308,28 @@
 				"capabilities": {
 					"reasoning": true
 				}
+			},
+			"deepseek-v4-flash-0731": {
+				"title": "DeepSeek: DeepSeek V4 Flash 0731",
+				"model": "deepseek-v4-flash-0731",
+				"modelSource": "openrouter",
+				"modelTotalTokens": 1048576, // openrouter
+				"modelOutputTokens": 384000, // openrouter
+				"capabilities": {
+					"reasoning": true
+				},
+				"apikey": ""
+			},
+			"deepseek-v4-flash-latest": {
+				"title": "DeepSeek V4 Flash Latest",
+				"model": "deepseek-v4-flash-latest",
+				"modelSource": "openrouter",
+				"modelTotalTokens": 1048576, // openrouter
+				"modelOutputTokens": 4096, // default
+				"capabilities": {
+					"reasoning": true
+				},
+				"apikey": ""
 			}
 		}
 	},
@@ -537,6 +559,18 @@
 					"properties": [
 						"deepseek.deepseek-v4-pro"
 					]
+				},
+				{
+					"value": "deepseek-v4-flash-0731",
+					"properties": [
+						"deepseek.deepseek-v4-flash-0731"
+					]
+				},
+				{
+					"value": "deepseek-v4-flash-latest",
+					"properties": [
+						"deepseek.deepseek-v4-flash-latest"
+					]
 				}
 			]
 		},
@@ -633,6 +667,20 @@
 		},
 		"deepseek.deepseek-v4-pro": {
 			"object": "deepseek-v4-pro",
+			"properties": [
+				"llm.cloud.apikey",
+				"llm.cloud.modelSource"
+			]
+		},
+		"deepseek.deepseek-v4-flash-0731": {
+			"object": "deepseek-v4-flash-0731",
+			"properties": [
+				"llm.cloud.apikey",
+				"llm.cloud.modelSource"
+			]
+		},
+		"deepseek.deepseek-v4-flash-latest": {
+			"object": "deepseek-v4-flash-latest",
 			"properties": [
 				"llm.cloud.apikey",
 				"llm.cloud.modelSource"

@@ -174,7 +174,7 @@
 				"model": "kimi-latest",
 				"modelSource": "openrouter",
 				"modelTotalTokens": 1048576, // openrouter
-				"modelOutputTokens": 131072, // litellm
+				"modelOutputTokens": 1048576, // openrouter
 				"capabilities": {
 					"reasoning": true
 				},
@@ -185,6 +185,17 @@
 				"model": "kimi-k3",
 				"modelSource": "openrouter",
 				"modelTotalTokens": 1048576, // openrouter
+				"modelOutputTokens": 4096, // default
+				"capabilities": {
+					"reasoning": true
+				},
+				"apikey": ""
+			},
+			"kimi-k2-7-code-batch": {
+				"title": "MoonshotAI: Kimi K2.7 Code (batch)",
+				"model": "kimi-k2.7-code:batch",
+				"modelSource": "openrouter",
+				"modelTotalTokens": 262144, // openrouter
 				"modelOutputTokens": 4096, // default
 				"capabilities": {
 					"reasoning": true
@@ -314,6 +325,12 @@
 					"properties": [
 						"kimi.kimi-k3"
 					]
+				},
+				{
+					"value": "kimi-k2-7-code-batch",
+					"properties": [
+						"kimi.kimi-k2-7-code-batch"
+					]
 				}
 			]
 		},
@@ -354,6 +371,13 @@
 		},
 		"kimi.kimi-k3": {
 			"object": "kimi-k3",
+			"properties": [
+				"llm.cloud.apikey",
+				"llm.cloud.modelSource"
+			]
+		},
+		"kimi.kimi-k2-7-code-batch": {
+			"object": "kimi-k2-7-code-batch",
 			"properties": [
 				"llm.cloud.apikey",
 				"llm.cloud.modelSource"
