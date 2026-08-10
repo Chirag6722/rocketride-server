@@ -40,7 +40,7 @@ POLL_INTERVAL = 0.02
 def live_dir() -> str:
     """Directory holding in-flight artifact spools, created on first use."""
     path = os.environ.get('ROCKETRIDE_LIVE_MEDIA_DIR') or os.path.join(tempfile.gettempdir(), 'rocketride-live-media')
-    os.makedirs(path, exist_ok=True)
+    os.makedirs(path, mode=0o700, exist_ok=True)  # spools may hold private media in a shared tmp
     return path
 
 

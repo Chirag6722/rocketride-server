@@ -157,11 +157,13 @@ class IInstance(IInstanceBase):
 
     def _feed_frame(self, frame: bytes) -> None:
         """Write one frame to ffmpeg. A dead encoder ends the stream, it never raises."""
+        if self._proc is None or self._proc.stdin.closed:
+            return
         try:
             self._proc.stdin.write(frame)
             self._proc.stdin.flush()
             self._frame_count += 1
-        except (BrokenPipeError, OSError) as e:
+        except (BrokenPipeError, OSError, ValueError) as e:
             _log(f'_feed_frame: encoder went away after {self._frame_count} frames: {e}')
             self._close_stdin()
 

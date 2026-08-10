@@ -45,6 +45,7 @@ class MediaPublisher:
         self._mime = mime or ''
         self._proc = None
         self._stderr_tail = b''
+        self._stderr_thread = None
         self._dead = False
 
     @property
@@ -103,7 +104,8 @@ class MediaPublisher:
         except (OSError, subprocess.SubprocessError):
             self._proc = None
             return False
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
         return True
 
     def feed(self, data: bytes) -> None:
@@ -128,6 +130,8 @@ class MediaPublisher:
         except subprocess.TimeoutExpired:
             self._proc.kill()
             self._proc.wait()
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=1)  # let the drain finish so stderr_tail is populated
 
     def _close_stdin(self) -> None:
         if self._proc is not None and self._proc.stdin and not self._proc.stdin.closed:

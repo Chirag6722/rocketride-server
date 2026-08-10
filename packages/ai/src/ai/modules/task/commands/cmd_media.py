@@ -100,9 +100,11 @@ class MediaCommands(DAPConn):
         """
         if not isinstance(path, str) or not path:
             raise ValueError('media requires a non-empty "path" string')
-        normalized = path.lstrip('/')
+        normalized = path.lstrip('/').replace('\\', '/')
         if not normalized.startswith(_ARTIFACT_PREFIX):
             raise PermissionError(f'media path must be under {_ARTIFACT_PREFIX!r}')
+        if '..' in normalized.split('/'):
+            raise PermissionError('media path must not traverse parent directories')
         return normalized
 
     def _check_handle_budget(self) -> None:

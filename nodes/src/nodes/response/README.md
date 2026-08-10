@@ -122,7 +122,7 @@ When `transmit_media` is on **and** the engine has an SFU configured, the node s
 
 The SFU host comes from the **`ROCKETRIDE_MEDIA_SFU`** environment variable (e.g. `sfu.internal` or a LAN host). RTSP goes to `:8554`, WHEP is served at `http://<host>:8889/<stream_id>/whep`.
 
-- **No `ROCKETRIDE_MEDIA_SFU`** (or an `image` lane, or `transmit_media` off) → the node degrades to the buffered spool + base64 response above; storage still persists the media in both cases.
+- **No `ROCKETRIDE_MEDIA_SFU`** (or an `image` lane, or `transmit_media` off) → the node skips the live push and delivers the media the normal way: persisted through the account file store when one is available, or base64-inlined in the response when no file store is configured or it fails.
 - Each live push emits a `media_publish` observability event (`stream_id`, `mime_type`, `sfu`, `whep_url`, `transport: RTSP->WHEP`), surfaced in the monitor's Flow/Trace as proof the media went over WebRTC.
 
 ---

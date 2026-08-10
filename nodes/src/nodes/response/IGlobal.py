@@ -85,8 +85,9 @@ class IGlobal(IGlobalBase):
         if not client_id:
             return
         try:
-            store = Store.create()
-            self.file_store = store.get_file_store(client_id)
+            from ai.account.models import RequestContext
+
+            self.file_store = Store.file_store(RequestContext.engine(client_id), client_id=client_id)
             self.client_id = client_id
         except Exception as e:
             warning(f'response: FileStore init failed; media falls back to base64: {e}')

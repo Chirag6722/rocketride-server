@@ -10,7 +10,7 @@ import pytest
 
 from ai.account import live_media
 from ai.account.live_media import LiveReader, LiveWriter
-from ai.modules.task.commands.cmd_media import MediaCommands, _ARTIFACT_PREFIX
+from ai.modules.task.commands.cmd_media import MediaCommands
 
 CLIENT = 'user-1'
 PATH = 'outputs/video/x.mp4'
@@ -201,10 +201,13 @@ async def test_gates_on_task_data_not_task_store():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('path', ['secrets/key.pem', '/secrets/key.pem', 'outputs-evil/x.mp4'])
+@pytest.mark.parametrize(
+    'path',
+    ['secrets/key.pem', '/secrets/key.pem', 'outputs-evil/x.mp4', 'outputs/../secrets/key.pem', 'outputs\\..\\x'],
+)
 async def test_open_rejects_paths_outside_outputs(path):
     conn = _make_conn()
-    with pytest.raises(PermissionError, match=_ARTIFACT_PREFIX):
+    with pytest.raises(PermissionError, match='media path'):
         await _call(conn, subcommand='media_open', path=path)
 
 
