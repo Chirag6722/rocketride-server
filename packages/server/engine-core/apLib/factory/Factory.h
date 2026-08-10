@@ -87,9 +87,9 @@ public:
     template <typename T>
     using DetectLogLevel = std::is_enum<decltype(T::LogLevel)>;
 
-    static ErrorOr<FACTORY> findFactory(iTextView type,
-                                        iTextView name) noexcept;
-    static Names getFactories(iTextView type) noexcept;
+    static ROCKETRIDE_CORE_API ErrorOr<FACTORY> findFactory(
+        iTextView type, iTextView name) noexcept;
+    static ROCKETRIDE_CORE_API Names getFactories(iTextView type) noexcept;
 
     // Define the sorter for factories
     struct Sorter {
@@ -172,8 +172,9 @@ public:
     static ErrorOr<Ptr<T>> find(Location location, uint32_t requiredFlags,
                                 TextView name, Args &&...args) noexcept;
 
-    // Accessor for the global factory set
-    static Set &factories() noexcept;
+    // Accessor for the global factory set. Exported so a node module shares
+    // the engine's one registry rather than building a private one.
+    static ROCKETRIDE_CORE_API Set &factories() noexcept;
 
     // Register a factory in the factory set
     template <typename... Args>
@@ -190,11 +191,14 @@ public:
     }
 
     // Register/de-register a single factory
-    static Error registerFactoryEntry(const FACTORY &factory) noexcept;
-    static void deregisterFactoryEntry(const FACTORY &factory) noexcept;
+    static ROCKETRIDE_CORE_API Error
+    registerFactoryEntry(const FACTORY &factory) noexcept;
+    static ROCKETRIDE_CORE_API void deregisterFactoryEntry(
+        const FACTORY &factory) noexcept;
 
 private:
-    static std::vector<FACTORY> expand(const FACTORY &factory) noexcept;
+    static ROCKETRIDE_CORE_API std::vector<FACTORY> expand(
+        const FACTORY &factory) noexcept;
 #if defined(ROCKETRIDE_FACTORY_DEBUG)
     // Declare our instance structure, it contains callbacks to render
     // the type information and live string conversion for live stats

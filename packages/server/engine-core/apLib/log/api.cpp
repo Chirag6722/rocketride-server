@@ -25,6 +25,17 @@
 
 namespace ap::log {
 
+// This function holds a static instantiation of the levels array. Given a
+// genuine out-of-line definition (rather than inline in a header) so a real
+// symbol is always emitted for a node module to import - an inline function
+// that Release optimizes away at every call site never materializes one,
+// which left the engine's own copy unreachable and node loads failing with
+// an undefined symbol on Linux.
+LvlStateArray &LvlState() noexcept {
+    static LvlStateArray states = {};
+    return states;
+}
+
 Atomic<bool> &initialized() noexcept {
     // Start out initialized as we are mostly concerned with tear down guards
     static Atomic<bool> init = {true};

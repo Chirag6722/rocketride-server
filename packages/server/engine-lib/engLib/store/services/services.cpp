@@ -1613,6 +1613,90 @@ void IServices::resolveDescriptions(json::Value &node) noexcept {
 
 //-------------------------------------------------------------------------
 /// @details
+///		Loads the shared library of a C++ node and runs its initializeNode
+///		entry point, which is what registers the node's factories. The
+///		library sits beside the engine executable, under
+///		nodes/<node directory>/, where the node directory is the one its
+///		services.json was loaded from and the library base name comes from
+///		the definition's "path" field.
+/// @param[in] def
+///		The service definition of the node to load
+///	@returns
+///		Error
+//-------------------------------------------------------------------------
+bool &nodeModulesSupported() noexcept {
+    static bool supported = false;
+    return supported;
+}
+
+Error IServices::loadNodeLibrary(const ServiceDefinition &def) noexcept {
+    // Only a host built on the shared engine module can hold a node - see
+    // nodeModulesSupported(). Skipping keeps the statically linked test
+    // binaries able to read the same service definitions.
+    if (!nodeModulesSupported()) {
+        LOG(Services,
+            "    Node library  : skipped, this host does not share the engine "
+            "module");
+        return {};
+    }
+
+    // The library base name is required - without it there is nothing to load
+    if (!def.nodePath)
+        return APERR(Ec::InvalidParam,
+                     "A cpp node requires a path to its shared library in",
+                     def.definitionPath);
+
+    // The node directory is the one holding the definition we just read.
+    // Kept as a named local rather than chaining .fileName() off the
+    // parent() temporary directly.
+    const auto nodeParent = def.definitionPath.parent();
+    const auto nodeDir = nodeParent.fileName();
+
+    // Compose the platform's library file name from the base name
+#if ROCKETRIDE_PLAT_WIN
+    const auto libName = _ts(def.nodePath, ".dll");
+#elif ROCKETRIDE_PLAT_MAC
+    const auto libName = _ts("lib", def.nodePath, ".dylib");
+#else
+    const auto libName = _ts("lib", def.nodePath, ".so");
+#endif
+
+    // Nodes are always resolved against the executable. In a repo build the
+    // definitions come from nodes/src/nodes while the libraries are built
+    // into dist/server/nodes - the two halves of a node do not share a
+    // directory, which is why this is not relative to definitionPath.
+    const auto libPath = application::execDir() / "nodes" / nodeDir / libName;
+
+    LOG(Services, "    Node library  :", libPath);
+
+    if (!file::exists(libPath))
+        return APERR(Ec::NotFound, "The cpp node library", libPath,
+                     "declared by", def.definitionPath, "was not found");
+
+    // Bind both entry points before running either, so a node missing its
+    // teardown is rejected rather than half-registered
+    auto initNode =
+        plat::dynamicBind<bool()>(libPath, ROCKETRIDE_NODE_INIT);
+    if (!initNode) return initNode.ccode();
+
+    auto deinitNode =
+        plat::dynamicBind<void()>(libPath, ROCKETRIDE_NODE_DEINIT);
+    if (!deinitNode) return deinitNode.ccode();
+
+    // Let the node register its factories
+    if (!(*initNode)())
+        return APERR(Ec::Failed, "The cpp node", libPath,
+                     "failed to initialize");
+
+    // Remember how to unregister them again
+    m_nodeDeinits.push_back(*deinitNode);
+
+    LOG(Services, "    Register      : Cpp node");
+    return {};
+}
+
+//-------------------------------------------------------------------------
+/// @details
 ///		Loads all the service definitions
 //-------------------------------------------------------------------------
 Error IServices::init() noexcept {
@@ -1935,6 +2019,16 @@ Error IServices::init() noexcept {
             // Save it
             m_services[logicalType] = _mv(def);
 
+            // A C++ node brings its own factories: load its shared library
+            // and let its initializeNode entry point register them. The
+            // "register" field does not apply - only the node knows which
+            // of the global/instance/endpoint classes it implements.
+            if (m_services[logicalType].physicalType == "cpp") {
+                if (auto ccode = loadNodeLibrary(m_services[logicalType]))
+                    return ccode;
+                continue;
+            }
+
             // Register the factories if needed
             if (registerType == "filter") {
                 LOG(Services, "    Register      : Filter");
@@ -2029,7 +2123,15 @@ Error IServices::init() noexcept {
 /// @details
 ///		Deinits the service definitions
 //-------------------------------------------------------------------------
-Error IServices::deinit() noexcept { return {}; }
+Error IServices::deinit() noexcept {
+    // Let every C++ node pull its factories back out of the registry. They
+    // point into the node modules, so this has to happen while those are
+    // still mapped.
+    for (auto deinitNode : m_nodeDeinits) deinitNode();
+    m_nodeDeinits.clear();
+
+    return {};
+}
 
 //-------------------------------------------------------------------------
 /// @details

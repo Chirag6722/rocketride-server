@@ -52,6 +52,11 @@ extern "C" ENGINE_API int engine_run(int argc, const wchar_t** argv) noexcept {
     // Set the global commandline
     ::ap::application::cmdline() = {argc, argv};
 
+    // A node module links against this module, so anything it registers lands
+    // in this engine instance. Declaring that here is what allows C++ nodes to
+    // load at all
+    ::engine::store::nodeModulesSupported() = true;
+
     // Initialize apLib
     auto initScope = ::ap::init();
 
@@ -104,6 +109,11 @@ extern "C" ENGINE_API int engine_run(int argc, const char** argv) noexcept {
 
     // Set the global commandline
     ::ap::application::cmdline() = {argc, argv};
+
+    // A node module links against this module, so anything it registers lands
+    // in this engine instance. Declaring that here is what allows C++ nodes to
+    // load at all
+    ::engine::store::nodeModulesSupported() = true;
 
 #if ROCKETRIDE_PLAT_LIN
     // Ready the core

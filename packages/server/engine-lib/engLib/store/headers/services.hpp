@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include <node_api.h>
+
 namespace engine::store {
 //-------------------------------------------------------------------------
 ///	@details
@@ -249,9 +251,37 @@ private:
     inline static std::vector<FACTORY> m_dynamicFactories;
 
     //-----------------------------------------------------------------
+    ///	@details
+    ///		The deinitializeNode entry point of every C++ node we loaded.
+    ///		They have to run before shutdown tears the registry down, since
+    ///		the factories they remove point into the node modules.
+    //-----------------------------------------------------------------
+    inline static std::vector<RocketrideNodeDeinit> m_nodeDeinits;
+
+    //-----------------------------------------------------------------
+    ///	@details
+    ///		Loads a C++ node's shared library and registers its factories
+    //-----------------------------------------------------------------
+    static Error loadNodeLibrary(const ServiceDefinition &def) noexcept;
+
+    //-----------------------------------------------------------------
     /// @details
     ///		Our list of global field defintions
     //-----------------------------------------------------------------
     inline static ServiceFields m_fields{};
 };
+
+//-------------------------------------------------------------------------
+///	@details
+///		Whether this process can host C++ node modules, set by the shared
+///		engine module at startup.
+///
+///		A node module links against engineMod, so it only shares one engine
+///		instance with a host that is itself built on engineMod. A host that
+///		linked engLib statically - engtest, aptest - would pull in a second,
+///		independent engine when a node loads, which fails outright. Those
+///		hosts leave this false and C++ nodes are skipped.
+//-------------------------------------------------------------------------
+bool &nodeModulesSupported() noexcept;
+
 }  // namespace engine::store

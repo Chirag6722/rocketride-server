@@ -35,6 +35,13 @@ if(ROCKETRIDE_FACTORY_DEBUG)
     target_compile_definitions(apLib PUBLIC -DROCKETRIDE_FACTORY_DEBUG=1)
 endif()
 
+# JsonCpp's own export macro (json/jsonCpp.h) - exports Value/ValueIteratorBase
+# from engineMod, part of the node DLL ABI
+target_compile_definitions(apLib PUBLIC JSON_DLL_BUILD)
+
+# ROCKETRIDE_CORE_API (ap.h) - exports the rest of the node DLL ABI from engineMod
+target_compile_definitions(apLib PUBLIC ROCKETRIDE_CORE_BUILD)
+
 if(ROCKETRIDE_PLAT_WIN)
     target_compile_definitions(apLib PUBLIC -DBOOST_STACKTRACE_LINK)
     find_package(Boost CONFIG REQUIRED COMPONENTS stacktrace_windbg)
