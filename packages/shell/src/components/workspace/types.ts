@@ -226,6 +226,14 @@ export interface AppManifestEntry {
 	 */
 	configuration?: AppConfiguration;
 	/**
+	 * Resolved app version (semver) for the desktop tile version chip —
+	 * a built-in's package version, a marketplace app's active version, or
+	 * a deployed pin's appVersion. Absent when the server sent none.
+	 */
+	version?: string;
+	/** True when the entry is a dev-overlay override (live watch build). */
+	dev?: boolean;
+	/**
 	 * When false, the app can run without authentication (e.g. home/landing page).
 	 * Defaults to true — most apps require the user to be logged in.
 	 */

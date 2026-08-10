@@ -41,7 +41,9 @@ Apps ride the SAME teams-as-environments registry pipelines use
 Verbs (DAP command ``rrext_app_deploy``): ``publish`` (snapshot an
 immutable version — no auto-activation anywhere), ``versions`` (the rail),
 ``deploy`` (pin a rung; first publish, update, promote, and rollback are
-all this one verb), ``where`` (the reverse index).
+all this one verb), ``where`` (the reverse index), ``entry`` (mint a
+signed bundle URL for one specific version — the desktop version
+selector's launch path; entitlement-checked at minting).
 
 Shared platform infrastructure: works on the OSS local engine (single
 implicit org/user 'local') and SaaS alike — no marketplace dependency.
@@ -197,7 +199,25 @@ async def handle_app_deploy(conn: Any, request: Dict[str, Any]) -> Dict[str, Any
         target = args.get('target', '')
         if not isinstance(version, int):
             return conn.build_error(request, 'version (registry version number) is required')
-        resolved = _resolve_target(conn, target)
+        # Target validation failures answer as clean DAP errors on BOTH
+        # flavours — the OSS path calls this handler directly, without the
+        # SaaS wrapper's ValueError-to-error conversion around it.
+        try:
+            resolved = _resolve_target(conn, target)
+        except ValueError as exc:
+            return conn.build_error(request, str(exc))
+        # Personal-rung entitlement: without this, ANY authenticated user
+        # could pin ANY registry version onto themselves and receive the
+        # bundle. A personal pin requires the version to already be visible
+        # on one of the caller's rungs, or the caller to be its publisher
+        # (the developer self-publish flow pins a fresh, un-pinned version).
+        if resolved['rung'] == 'personal':
+            if not await _caller_entitled_to_version(conn, account, org_id, app_id, version):
+                return conn.build_error(
+                    request,
+                    f'Not entitled to version {version} of {app_id} '
+                    '(not deployed to any of your rungs, and you are not its publisher)',
+                )
         record = await account.deployments_deploy(org_id, resolved['key'], app_id, version, _actor_of(conn))
 
         # Personal deploys land on the desktop automatically: the pin itself
@@ -219,6 +239,40 @@ async def handle_app_deploy(conn: Any, request: Dict[str, Any]) -> Dict[str, Any
     if sub == 'where':
         pins = await _pins_of(conn, account, org_id, app_id)
         return conn.build_response(request, body={'pins': pins})
+
+    # ── entry — mint a signed bundle URL for ONE specific version ─────────
+    # The desktop version selector's launch path: the client resolved a
+    # version (drop list or ?version= deep link) and needs the entry URL.
+    # This is THE enforcement point — the caller must be entitled to the
+    # version (pinned on a rung they belong to, or they published it).
+    if sub == 'entry':
+        resolved_version = await _resolve_version_arg(account, org_id, app_id, args.get('version'))
+        if resolved_version is None:
+            return conn.build_error(request, f'Version {args.get("version")!r} of {app_id} not found')
+        if not await _caller_entitled_to_version(conn, account, org_id, app_id, resolved_version):
+            return conn.build_error(
+                request,
+                f'Not entitled to version {args.get("version")!r} of {app_id} '
+                '(not deployed to any of your rungs, and you are not its publisher)',
+            )
+        artifact = await _artifact_of(account, org_id, app_id, {'version': resolved_version})
+        if not isinstance(artifact, dict) or artifact.get('kind') != 'app':
+            return conn.build_error(request, f'Registry version {resolved_version} of {app_id} is not an app artifact')
+        from ai.account.file_store import mint_directory_url
+
+        try:
+            url = mint_directory_url(artifact['bundleDir'], 'remoteEntry.js', sub='app-entry')
+        except Exception as exc:
+            return conn.build_error(request, f'Failed to mint bundle URL: {exc}')
+        return conn.build_response(
+            request,
+            body={
+                'url': url,
+                'moduleId': artifact.get('moduleId') or app_id.replace('.', '_'),
+                'appVersion': artifact.get('appVersion', ''),
+                'registryVersion': resolved_version,
+            },
+        )
 
     return conn.build_error(request, f'Unknown subcommand: {sub!r}')
 
@@ -248,6 +302,73 @@ async def _artifact_of(account: Any, org_id: str, app_id: str, entry: Dict[str, 
         return await account.deployments_artifact(org_id, app_id, int(entry.get('version', 0)))
     except Exception:
         return None
+
+
+async def _resolve_version_arg(account: Any, org_id: str, app_id: str, version_arg: Any) -> Optional[int]:
+    """
+    Resolves a wire version argument to a registry version number.
+
+    Accepts a registry version int directly, or a semver string ('1.3.0',
+    'v' prefix tolerated) matched against artifact appVersions — newest
+    registry entry wins when a semver was re-published.
+
+    Args:
+        account:     The account singleton.
+        org_id:      Caller's org id.
+        app_id:      App id.
+        version_arg: Raw ``arguments.version`` value (int or str).
+
+    Returns:
+        The registry version number, or None when unresolvable.
+    """
+    # Registry version numbers arrive as ints — verify the entry exists
+    if isinstance(version_arg, int):
+        entries = await account.deployments_versions(org_id, app_id)
+        return version_arg if any(int(e.get('version', 0)) == version_arg for e in entries) else None
+    # Semver strings match against artifact appVersion, newest registry first
+    if isinstance(version_arg, str) and version_arg:
+        semver = version_arg.lstrip('vV')
+        entries = await account.deployments_versions(org_id, app_id)
+        for entry in sorted(entries, key=lambda e: -int(e.get('version', 0))):
+            artifact = await _artifact_of(account, org_id, app_id, entry)
+            if artifact and artifact.get('appVersion') == semver:
+                return int(entry.get('version', 0))
+    return None
+
+
+async def _caller_entitled_to_version(conn: Any, account: Any, org_id: str, app_id: str, version: int) -> bool:
+    """
+    Whether the caller may receive a specific registry version's bundle.
+
+    Entitled when the version is pinned on a rung the caller belongs to
+    (their personal rung, any of their teams, or the org), or when the
+    caller published that registry version (the developer flow — a fresh
+    version is pinned nowhere yet).
+
+    Args:
+        conn:    ``TaskConn`` instance.
+        account: The account singleton.
+        org_id:  Caller's org id.
+        app_id:  App id.
+        version: Registry version number.
+
+    Returns:
+        True when entitled.
+    """
+    # Rung visibility — any live pin on the caller's rungs at this version
+    pins = await _pins_of(conn, account, org_id, app_id)
+    if any(int(pin.get('version', -1)) == version for pin in pins):
+        return True
+    # Publisher — the caller authored this registry version
+    try:
+        entries = await account.deployments_versions(org_id, app_id)
+    except Exception:
+        return False
+    for entry in entries:
+        if int(entry.get('version', 0)) == version:
+            who = entry.get('publishedBy') or {}
+            return who.get('userId') == conn._account_info.userId
+    return False
 
 
 async def _pins_of(conn: Any, account: Any, org_id: str, app_id: str) -> List[Dict[str, Any]]:

@@ -50,7 +50,8 @@ import { CheckoutFlow } from './CheckoutFlow';
 import { ApiKeyLogin } from './ApiKeyLogin';
 import LoadingScreen from './LoadingScreen';
 import { SS_PENDING_APP_ID, getHomeAppId } from '../../constants';
-import { registerAndMapApps, getRegisteredEntry, invalidateAppDescriptor, getLocalAppEntries, setLocalAppsListener, isDevRemote } from '../../util/appLoader';
+import { registerAndMapApps, getRegisteredEntry, invalidateAppDescriptor, getLocalAppEntries, setLocalAppsListener, isDevRemote, repointRemote } from '../../util/appLoader';
+import { getAppVersionOverrides, setAppVersionOverride, clearAppVersionOverride } from '../../util/versionOverride';
 import type { ServerAppEntry } from '../../util/appLoader';
 import { waitForEmbeddedSession } from '../../util/devMode';
 
@@ -162,6 +163,13 @@ const Shell: React.FC<ShellProps> = ({ config }) => {
 	const [sessionAppId] = useState<string>(() => {
 		const params = new URLSearchParams(window.location.search);
 		const fromUrl = params.get('appId') || params.get('appid') || '';
+		// Deep-link version pin (?appid=X&version=1.3.0) — seed/replace the
+		// session override; the post-auth mint effect below resolves it to a
+		// signed entry URL (the server accepts semver, 'v' prefix tolerated).
+		const versionParam = params.get('version') || '';
+		if (fromUrl && versionParam) {
+			setAppVersionOverride(fromUrl, { version: versionParam });
+		}
 		if (fromUrl) {
 			cm.setSessionAppId(fromUrl);
 			return fromUrl;
@@ -358,6 +366,48 @@ const Shell: React.FC<ShellProps> = ({ config }) => {
 		registerAndMapApps(changed);
 		for (const a of changed) invalidateAppDescriptor(a.id);
 	}, [identity?.apps]);
+
+	// Re-mint session version overrides once authenticated. Every boot mints
+	// fresh signed entry URLs for the overridden apps (URLs expire; deep-link
+	// overrides start with no URL at all) and repoints containers whose
+	// registered entry differs — the same reconciliation the entry-change
+	// effect above performs for server-side repoints. An override the server
+	// rejects (entitlement lost, version gone) is dropped so the app falls
+	// back to default resolution instead of failing to load.
+	useEffect(() => {
+		const overrides = getAppVersionOverrides();
+		const appIds = Object.keys(overrides);
+		if (!identity || appIds.length === 0) return;
+		const client = cm.getClient();
+		if (!client) return;
+		let cancelled = false;
+		(async () => {
+			for (const appId of appIds) {
+				const app = apps.find((a) => a.id === appId);
+				// Dev-owned containers keep the live build; unknown apps keep
+				// their override dormant until the app appears in the manifest.
+				if (!app || isDevRemote(app.moduleId)) continue;
+				try {
+					const minted = await client.appEntry(appId, overrides[appId].version);
+					if (cancelled) return;
+					setAppVersionOverride(appId, {
+						version: minted.registryVersion,
+						appVersion: minted.appVersion,
+						url: minted.url,
+					});
+					if (getRegisteredEntry(app.moduleId) !== minted.url) {
+						repointRemote(app.moduleId, minted.url);
+						invalidateAppDescriptor(appId);
+					}
+				} catch (err) {
+					if (cancelled) return;
+					console.log(`[shell] dropping version override for ${appId}: ${err instanceof Error ? err.message : String(err)}`);
+					clearAppVersionOverride(appId);
+				}
+			}
+		})();
+		return () => { cancelled = true; };
+	}, [identity, apps, cm]);
 
 	// Refresh identity on account update
 	useEffect(() => {

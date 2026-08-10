@@ -30,7 +30,7 @@ reverse index (where). Mirrors the TypeScript client's appPublish /
 appVersions / appDeploy / appWhere.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ..core import DAPClient
 
@@ -123,3 +123,23 @@ class AppsMixin(DAPClient):
         """
         body = await self.call('rrext_app_deploy', subcommand='where', appId=app_id)
         return body.get('pins', [])
+
+    async def app_entry(self, app_id: str, version: Union[int, str]) -> Dict[str, Any]:
+        """
+        Mint a signed bundle-entry URL for one specific published version.
+
+        The desktop version selector's launch path. The server enforces
+        entitlement at minting: the version must be pinned on a rung the
+        caller belongs to, or the caller must be its publisher. Mirrors the
+        TypeScript client's ``appEntry``.
+
+        Args:
+            app_id:  App id.
+            version: Registry version number, or a semver string
+                     ('1.3.0', 'v' prefix tolerated).
+
+        Returns:
+            Dict with ``url``, ``moduleId``, ``appVersion``, and
+            ``registryVersion``.
+        """
+        return await self.call('rrext_app_deploy', subcommand='entry', appId=app_id, version=version)

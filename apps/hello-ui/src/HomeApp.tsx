@@ -45,7 +45,7 @@ import GitHubStars from './GitHubStars';
 // single curated contract accessor rather than named value imports from
 // shell. Types continue to come from shell's type surface (the same
 // contract types the frozen shell-api snapshot conforms to).
-const { useWorkspace, ConnectionManager } = getShellApi();
+const { useWorkspace, ConnectionManager, getAppVersionOverride, applyAppVersionOverride } = getShellApi();
 
 // =============================================================================
 // CONSTANTS
@@ -306,32 +306,30 @@ const styles = {
 		maxWidth: 1080,
 	} as CSSProperties,
 
-	/** Individual app card — whole card is the launch target (matches home-ui). */
+	/** Individual app card — whole card is the launch target (matches home-ui).
+	    Borderless by design; anchors the version popover (position relative). */
 	card: {
+		position: 'relative' as const,
 		display: 'flex',
 		flexDirection: 'column' as const,
 		gap: 14,
 		padding: 20,
 		borderRadius: 12,
 		boxSizing: 'border-box' as const,
-		border: '1px solid var(--rr-border)',
 		backgroundColor: 'var(--rr-bg-paper)',
 		cursor: 'pointer',
-		// transform is ALWAYS present ('none' at rest) and hover swaps the WHOLE
-		// border shorthand — every hover key exists in both states. React cannot
-		// reliably diff a shorthand (border) against its longhand (borderColor)
-		// across renders, which left stale border-color on unhovered cards.
+		// transform is ALWAYS present ('none' at rest) so every hover key
+		// exists in both states — React diffs the pair reliably.
 		transform: 'none',
 		transition: REDUCE_MOTION
 			? 'none'
-			: 'transform 0.12s ease, background-color 0.12s ease, border-color 0.12s ease',
+			: 'transform 0.12s ease, background-color 0.12s ease',
 	} as CSSProperties,
 
-	/** Card hover effect — bg/border shift + slight lift (unless reduced motion).
+	/** Card hover effect — bg shift + slight lift (unless reduced motion).
 	    Overrides only keys that exist in `card` (see note there). */
 	cardHover: {
 		backgroundColor: 'var(--rr-bg-list-hover, var(--rr-bg-surface-alt))',
-		border: '1px solid var(--rr-border-hover)',
 		...(REDUCE_MOTION ? {} : { transform: 'translateY(-2px)' }),
 	} as CSSProperties,
 
@@ -343,7 +341,8 @@ const styles = {
 		gap: 14,
 	} as CSSProperties,
 
-	/** 52px icon chip — app icon image, or first-letter monogram fallback. */
+	/** 52px icon chip — app icon image, or first-letter monogram fallback.
+	    Borderless by design — the surface tint alone frames the icon. */
 	iconChip: {
 		width: 52,
 		height: 52,
@@ -351,7 +350,6 @@ const styles = {
 		borderRadius: 12,
 		overflow: 'hidden',
 		backgroundColor: 'var(--rr-bg-surface-alt)',
-		border: '1px solid var(--rr-border)',
 		display: 'flex',
 		alignItems: 'center',
 		justifyContent: 'center',
@@ -404,6 +402,86 @@ const styles = {
 		WebkitLineClamp: 2,
 		WebkitBoxOrient: 'vertical' as const,
 		overflow: 'hidden',
+	} as CSSProperties,
+
+	/** Bottom row of the card — hosts the version chip, pinned bottom-left. */
+	versionRow: {
+		display: 'flex',
+		alignItems: 'center',
+		marginTop: 'auto',
+	} as CSSProperties,
+
+	/** Faint version chip — click opens the version drop list. */
+	versionChip: {
+		display: 'inline-flex',
+		alignItems: 'center',
+		gap: 4,
+		padding: 0,
+		border: 'none',
+		backgroundColor: 'transparent',
+		color: 'var(--rr-text-secondary)',
+		opacity: 0.65,
+		fontSize: 11,
+		fontWeight: 500,
+		fontFamily: 'inherit',
+		cursor: 'pointer',
+	} as CSSProperties,
+
+	/** Version drop list — popover anchored above the chip. */
+	versionPopover: {
+		position: 'absolute' as const,
+		left: 16,
+		bottom: 44,
+		zIndex: 10,
+		minWidth: 230,
+		padding: '6px 0',
+		borderRadius: 10,
+		border: '1px solid var(--rr-border)',
+		backgroundColor: 'var(--rr-bg-paper)',
+		boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+	} as CSSProperties,
+
+	/** One selectable version row inside the drop list. */
+	versionItem: {
+		display: 'flex',
+		alignItems: 'baseline',
+		gap: 8,
+		width: '100%',
+		padding: '7px 14px',
+		border: 'none',
+		borderRadius: 0,
+		backgroundColor: 'transparent',
+		color: 'var(--rr-text-primary)',
+		fontSize: 12.5,
+		fontWeight: 600,
+		fontFamily: 'inherit',
+		textAlign: 'left' as const,
+		cursor: 'pointer',
+		boxSizing: 'border-box' as const,
+	} as CSSProperties,
+
+	/** Rung provenance label beside the version number. */
+	versionItemRung: {
+		fontSize: 11,
+		fontWeight: 400,
+		color: 'var(--rr-text-secondary)',
+	} as CSSProperties,
+
+	/** Current-version marker, right-aligned in its row. */
+	versionItemMark: {
+		marginLeft: 'auto',
+		fontSize: 10,
+		fontWeight: 600,
+		textTransform: 'uppercase' as const,
+		letterSpacing: 0.5,
+		color: 'var(--rr-brand)',
+	} as CSSProperties,
+
+	/** Non-interactive hint row at the bottom of the drop list. */
+	versionHint: {
+		padding: '7px 14px 4px',
+		fontSize: 11,
+		color: 'var(--rr-text-secondary)',
 	} as CSSProperties,
 
 	/** Sign In / Sign Out button. */
@@ -534,10 +612,25 @@ const ThemeToggle: React.FC<{ theme: string; onSetTheme: (id: string) => void }>
 // APP CARD
 // =============================================================================
 
+/** One deduplicated row of the version drop list. */
+interface VersionRow {
+	/** Registry version number (the launch key — monotonic, never semver-compared). */
+	registryVersion: number;
+	/** Artifact semver for display. */
+	appVersion: string;
+	/** Rung handles pinning this version (e.g. '@team/Development'). */
+	handles: string[];
+}
+
 /**
  * Single desktop app card — mirrors home-ui's DesktopAppCard pattern: hover
  * state lives locally in each card (not in the parent grid), the arrangement
  * proven stable on the SaaS desktop. The whole card is the launch target.
+ *
+ * A faint version chip sits bottom-left; clicking it opens a drop list of
+ * every version the user is entitled to (their rungs, deduplicated by
+ * registry version). Picking one is a SESSION override: minted entry URL +
+ * repoint when the container has not loaded yet, full reload otherwise.
  *
  * @param props.app - Manifest entry to render.
  * @param props.onLaunch - Invoked with the app when the card is activated.
@@ -545,9 +638,88 @@ const ThemeToggle: React.FC<{ theme: string; onSetTheme: (id: string) => void }>
 const AppCard: React.FC<{ app: AppManifestEntry; onLaunch: (app: AppManifestEntry) => void }> = ({ app, onLaunch }) => {
 	// Local hover state — per-card, like home-ui's DesktopAppCard
 	const [hover, setHover] = React.useState(false);
+	// Version drop list — rows load lazily on first open
+	const [versionsOpen, setVersionsOpen] = React.useState(false);
+	const [versionRows, setVersionRows] = React.useState<VersionRow[] | null>(null);
+	// Bumped after select/reset so the chip re-reads the session override
+	const [overrideSeq, setOverrideSeq] = React.useState(0);
+	const popoverRef = React.useRef<HTMLDivElement>(null);
 
 	// First manifest category, formatted for display (may be absent)
 	const category = app.categories?.[0] ? formatCategory(app.categories[0]) : null;
+
+	// Effective version label — live dev build > session override > manifest
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- overrideSeq forces the re-read after select/reset
+	const override = React.useMemo(() => getAppVersionOverride(app.id), [app.id, overrideSeq]);
+	const versionLabel = app.dev ? 'dev' : (override?.appVersion ?? app.version);
+
+	// Close the drop list on outside click (mirrors home-ui's popover)
+	React.useEffect(() => {
+		if (!versionsOpen) return;
+		const handler = (e: MouseEvent) => {
+			if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+				setVersionsOpen(false);
+			}
+		};
+		document.addEventListener('mousedown', handler);
+		return () => document.removeEventListener('mousedown', handler);
+	}, [versionsOpen]);
+
+	/** Toggle the drop list; fetch + dedupe the entitled versions on first open. */
+	const toggleVersions = async (e: React.SyntheticEvent) => {
+		e.stopPropagation();
+		setVersionsOpen((v) => !v);
+		if (versionRows !== null) return;
+		try {
+			const client = ConnectionManager.getInstance().getClient();
+			if (!client) { setVersionRows([]); return; }
+			const pins = await client.appWhere(app.id);
+			// Dedupe by registry version — one row per version, all rungs listed
+			const byVersion = new Map<number, VersionRow>();
+			for (const pin of pins) {
+				const row = byVersion.get(pin.version) ?? { registryVersion: pin.version, appVersion: pin.appVersion, handles: [] };
+				row.handles.push(pin.handle);
+				byVersion.set(pin.version, row);
+			}
+			setVersionRows([...byVersion.values()].sort((a, b) => b.registryVersion - a.registryVersion));
+		} catch {
+			// Unauthenticated or no registry — the chip still shows the current version
+			setVersionRows([]);
+		}
+	};
+
+	/** Launch a specific version: mint its entry URL, apply the session override. */
+	const selectVersion = async (e: React.SyntheticEvent, row: VersionRow) => {
+		e.stopPropagation();
+		try {
+			const client = ConnectionManager.getInstance().getClient();
+			if (!client) return;
+			const minted = await client.appEntry(app.id, row.registryVersion);
+			const result = applyAppVersionOverride(app.id, app.moduleId, {
+				version: minted.registryVersion,
+				appVersion: minted.appVersion,
+				url: minted.url,
+			});
+			setVersionsOpen(false);
+			setOverrideSeq((n) => n + 1);
+			// A loaded container cannot be repointed — reboot registers the
+			// override before anything loads; otherwise launch right away.
+			if (result === 'reload-required') { window.location.reload(); return; }
+			onLaunch(app);
+		} catch (err) {
+			console.log(`[hello] version select failed for ${app.id}: ${err instanceof Error ? err.message : String(err)}`);
+			setVersionsOpen(false);
+		}
+	};
+
+	/** Drop the session override — back to the server's default resolution. */
+	const resetVersion = (e: React.SyntheticEvent) => {
+		e.stopPropagation();
+		const result = applyAppVersionOverride(app.id, app.moduleId, null);
+		setVersionsOpen(false);
+		setOverrideSeq((n) => n + 1);
+		if (result === 'reload-required') window.location.reload();
+	};
 
 	return (
 		<div
@@ -576,6 +748,59 @@ const AppCard: React.FC<{ app: AppManifestEntry; onLaunch: (app: AppManifestEntr
 			<p style={styles.appDesc}>
 				{app.description || 'No description'}
 			</p>
+
+			{/* Version chip — bottom-left, faint; opens the drop list */}
+			{versionLabel && (
+				<div style={styles.versionRow}>
+					<button
+						type="button"
+						style={styles.versionChip}
+						title="Switch version"
+						aria-haspopup="listbox"
+						aria-expanded={versionsOpen}
+						onClick={toggleVersions}
+						onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
+					>
+						v{versionLabel.replace(/^v/i, '')}
+						{override && ' (session)'}
+					</button>
+				</div>
+			)}
+
+			{/* Version drop list */}
+			{versionsOpen && (
+				<div ref={popoverRef} style={styles.versionPopover} role="listbox" onClick={(e) => e.stopPropagation()}>
+					{versionRows === null && <div style={styles.versionHint}>Loading versions…</div>}
+					{versionRows !== null && versionRows.length === 0 && (
+						<div style={styles.versionHint}>No other versions available</div>
+					)}
+					{versionRows !== null && versionRows.map((row) => {
+						const isCurrent = row.appVersion === (override?.appVersion ?? app.version);
+						return (
+							<button
+								key={row.registryVersion}
+								type="button"
+								role="option"
+								aria-selected={isCurrent}
+								style={styles.versionItem}
+								onClick={(e) => selectVersion(e, row)}
+							>
+								v{row.appVersion.replace(/^v/i, '')}
+								<span style={styles.versionItemRung}>{row.handles.join(' · ')}</span>
+								{isCurrent && <span style={styles.versionItemMark}>current</span>}
+							</button>
+						);
+					})}
+					{override && (
+						<button type="button" style={styles.versionItem} onClick={resetVersion}>
+							Reset to default
+						</button>
+					)}
+					{versionRows !== null && versionRows.length > 0 && (
+						<div style={styles.versionHint}>Session only — clears when this tab closes</div>
+					)}
+				</div>
+			)}
 		</div>
 	);
 };

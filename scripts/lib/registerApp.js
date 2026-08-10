@@ -286,6 +286,10 @@ function registerApp(appRoot) {
 				publisher:     appManifest.publisher ?? '',
 				name:          appManifest.name,
 				description:   appManifest.description ?? '',
+				// Built-in app version (package.json) — surfaces on the desktop
+				// tile version chip; SaaS marketplace apps get theirs from the
+				// active AppVersion row in enrich_apps instead.
+				...(pkg.version ? { version: pkg.version } : {}),
 				readme,
 				icon,
 				categories:    appManifest.categories ?? [],

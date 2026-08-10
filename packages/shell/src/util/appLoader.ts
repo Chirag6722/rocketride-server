@@ -30,6 +30,11 @@
 
 import { registerRemotes, loadRemote } from '@module-federation/runtime';
 import type { AppManifestEntry, AppDescriptor, AppConfiguration } from '../components/workspace/types';
+// Session version overrides — read-only here (registration-time entry
+// substitution); the write side lives in versionOverride.ts. The two
+// modules reference each other strictly through function calls at runtime,
+// so the import cycle carries no module-evaluation (TDZ) risk.
+import { getAppVersionOverrides } from './versionOverride';
 
 /**
  * Shape of an app entry from the server (rrext_public_probe or ConnectResult).
@@ -58,6 +63,10 @@ export interface ServerAppEntry {
 	authenticated?: boolean;
 	/** Whether the app is visible to unauthenticated users. */
 	public?: boolean;
+	/** Resolved app version (semver) — built-in package version, marketplace active version, or deployed pin. */
+	version?: string;
+	/** True when the entry is a dev-overlay override (live watch build). */
+	dev?: boolean;
 }
 
 /**
@@ -74,6 +83,36 @@ export interface ServerAppEntry {
 // resetRemote() can tear down and re-register a container without callers
 // having to thread the entry URL through.
 const registeredEntries = new Map<string, string>();
+
+// MF containers whose remote has successfully LOADED this document. A loaded
+// container is committed to its version (identity is the name — repointing a
+// loaded container corrupts its shared getters), so the version selector
+// consults this to decide repoint-in-place vs full reload.
+const loadedModules = new Set<string>();
+
+/**
+ * Whether an MF container's remote has successfully loaded this document.
+ *
+ * @param moduleId - The MF container name.
+ */
+export function isRemoteLoaded(moduleId: string): boolean {
+	return loadedModules.has(moduleId);
+}
+
+/**
+ * Force re-register an MF container at a new entry URL (version override
+ * apply/boot). Refuses dev-owned containers — the live dev build always
+ * wins. Callers must only repoint containers that have not loaded yet
+ * (see isRemoteLoaded); loaded containers require a page reload.
+ *
+ * @param moduleId - The MF container name.
+ * @param entry - The new remoteEntry.js URL.
+ */
+export function repointRemote(moduleId: string, entry: string): void {
+	if (devRemoteModules.has(moduleId)) return;
+	registerRemotes([{ name: moduleId, entry }], { force: true });
+	registeredEntries.set(moduleId, entry);
+}
 
 // =============================================================================
 // LOCAL APP OVERRIDES (DEV HOOKS)
@@ -447,18 +486,28 @@ export function registerAndMapApps(serverApps: ServerAppEntry[]): AppManifestEnt
 	// Without this guard, MF's normalizeRemote crashes on undefined.
 	const validApps = serverApps.filter((a) => a.entry);
 
+	// Session version overrides (desktop version selector / ?version= deep
+	// link) with a minted URL substitute the manifest default SYNCHRONOUSLY
+	// at registration time — the boot path can then never race a load with
+	// an async repoint. Dev-overlay entries are exempt: the live build wins.
+	const overrides = getAppVersionOverrides();
+	const overrideOf = (a: ServerAppEntry): { url: string; appVersion?: string } | null => {
+		const o = overrides[a.id];
+		return o?.url && !a.dev ? { url: o.url, appVersion: o.appVersion } : null;
+	};
+
 	// Register all MF remotes so loadRemote() can resolve them.
 	// force: true overwrites any previously registered remotes (e.g. from
 	// the pre-auth probe) with the post-auth set. Dev-owned containers are
 	// NEVER (re)registered from the manifest — the dev entry stays live.
 	const registrable = validApps.filter((a) => !devRemoteModules.has(a.moduleId));
 	registerRemotes(
-		registrable.map((a) => ({ name: a.moduleId, entry: a.entry })),
+		registrable.map((a) => ({ name: a.moduleId, entry: overrideOf(a)?.url ?? a.entry })),
 		{ force: true },
 	);
 
 	// Record the registered URLs so resetRemote() can rebuild a container.
-	for (const a of registrable) registeredEntries.set(a.moduleId, a.entry);
+	for (const a of registrable) registeredEntries.set(a.moduleId, overrideOf(a)?.url ?? a.entry);
 
 	// Map server entries to runtime AppManifestEntry objects with lazy loaders
 	return validApps.map((a) => ({
@@ -474,6 +523,9 @@ export function registerAndMapApps(serverApps: ServerAppEntry[]): AppManifestEnt
 		configuration: a.configuration as AppConfiguration | undefined,
 		authenticated: a.authenticated,
 		public:        a.public,
+		// Version chip data — an applied override's semver wins the display
+		version:       overrideOf(a)?.appVersion ?? a.version,
+		dev:           a.dev,
 		load: () => {
 			// Local override wins over the MF remote — checked per CALL so a
 			// dev registration made after mapping still takes effect (and its
@@ -481,7 +533,12 @@ export function registerAndMapApps(serverApps: ServerAppEntry[]): AppManifestEnt
 			const local = localOverrides.get(a.id);
 			if (local) return local();
 			return (loadRemote(`${a.moduleId}/AppDescriptor`) as Promise<{ default: AppDescriptor }>)
-				.then((m) => m.default);
+				.then((m) => {
+					// A resolved remote commits this container to its version
+					// for the document's lifetime (see isRemoteLoaded).
+					loadedModules.add(a.moduleId);
+					return m.default;
+				});
 		},
 	}));
 }

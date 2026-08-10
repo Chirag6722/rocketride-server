@@ -2818,6 +2818,20 @@ export class RocketRideClient extends DAPClient {
 		return (body as any)?.pins ?? [];
 	}
 
+	/**
+	 * Mint a signed bundle-entry URL for ONE specific published version —
+	 * the desktop version selector's launch path. The server enforces
+	 * entitlement at minting: the version must be pinned on a rung the
+	 * caller belongs to, or the caller must be its publisher.
+	 *
+	 * @param appId - App id
+	 * @param version - Registry version number, or a semver string ('1.3.0', 'v' prefix tolerated)
+	 * @returns The signed entry URL plus the resolved version identity
+	 */
+	async appEntry(appId: string, version: number | string): Promise<{ url: string; moduleId: string; appVersion: string; registryVersion: number }> {
+		return (await this.call('rrext_app_deploy', { subcommand: 'entry', appId, version })) as any;
+	}
+
 	// ============================================================================
 	// CONVENIENCE WRAPPERS (text/JSON over binary, handle open/close internally)
 	// ============================================================================

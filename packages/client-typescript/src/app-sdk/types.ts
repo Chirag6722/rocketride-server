@@ -183,6 +183,14 @@ export interface AppManifestEntry {
 	categories?: string[];
 	/** The app's settings contribution (VSCode contributes.configuration shape). */
 	configuration?: AppConfiguration;
+	/**
+	 * Resolved app version (semver) for the desktop tile version chip —
+	 * a built-in's package version, a marketplace app's active version, or
+	 * a deployed pin's appVersion. Absent when the server sent none.
+	 */
+	version?: string;
+	/** True when the entry is a dev-overlay override (live watch build). */
+	dev?: boolean;
 	/** When false, the app runs without authentication. Default: true. */
 	authenticated?: boolean;
 	/** When false, the status bar is hidden for this app. Default: true. */

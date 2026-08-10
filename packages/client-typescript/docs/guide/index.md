@@ -309,6 +309,7 @@ update, promote, and rollback are all this one verb.
 | `appVersions` | `appVersions(appId): Promise<RailEntry[]>` | The version rail, newest first; each entry carries `rungs` naming the rungs currently pinned to it. |
 | `appDeploy` | `appDeploy(appId, registryVersion, target): Promise<{deployment, rung}>` | Pin a rung to a version. Personal deploys resolve into your own manifest immediately. |
 | `appWhere` | `appWhere(appId): Promise<Pin[]>` | The reverse index: `{rung, handle, version, appVersion, state, deployedAt}` per rung. |
+| `appEntry` | `appEntry(appId, version): Promise<{url, moduleId, appVersion, registryVersion}>` | Mint a signed bundle-entry URL for one specific version (registry number or semver string). Entitlement-checked at minting: the version must be pinned on one of your rungs, or you must be its publisher. |
 
 ### Events
 

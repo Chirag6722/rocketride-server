@@ -318,6 +318,7 @@ update, promote, and rollback are all this one verb.
 | `app_versions` | `async def app_versions(self, app_id) -> list[dict]` | The version rail, newest first; each entry carries `rungs` naming the rungs currently pinned to it. |
 | `app_deploy` | `async def app_deploy(self, app_id, registry_version, target) -> dict` | Pin a rung to a version. Personal deploys resolve into your own manifest immediately. |
 | `app_where` | `async def app_where(self, app_id) -> list[dict]` | The reverse index: `{rung, handle, version, appVersion, state, deployedAt}` per rung. |
+| `app_entry` | `async def app_entry(self, app_id, version) -> dict` | Mint a signed bundle-entry URL for one specific version (registry number or semver string). Entitlement-checked at minting: the version must be pinned on one of your rungs, or you must be its publisher. |
 
 ### Events
 
