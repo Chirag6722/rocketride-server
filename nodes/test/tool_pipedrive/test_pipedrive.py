@@ -10,6 +10,7 @@ env-gated live suite.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import traceback
 import types
@@ -914,6 +915,16 @@ _MANIFEST = json.loads(
 )
 
 
+def _tool_names_by_group() -> dict[str, set[str]]:
+    """Map each group to the tool names it publishes, read off the decorators."""
+    names: dict[str, set[str]] = {}
+    for attr_name in dir(IInstance):
+        group = getattr(getattr(IInstance, attr_name, None), '__pipedrive_group__', None)
+        if group:
+            names.setdefault(group, set()).add(attr_name)
+    return names
+
+
 class TestToolGroupsField:
     """The manifest drives the config panel; it must not drift from the code.
 
@@ -950,6 +961,32 @@ class TestToolGroupsField:
         labels = {option[0]: option[1] for option in self.field['items']['enum']}
         for group, count in tool_counts_by_group().items():
             assert f'({count})' in labels[group], f'{group} label is stale: {labels[group]}'
+
+    def test_every_option_carries_help_text(self):
+        """The third tuple element is the tooltip the config panel shows on that option."""
+        for option in self.field['items']['enum']:
+            assert len(option) == 3, f'{option[0]} has no description'
+            assert option[2].strip(), f'{option[0]} description is empty'
+            assert option[2].strip() != option[1].strip(), f'{option[0]} description just repeats its label'
+
+    def test_help_text_only_names_tools_that_exist(self):
+        """Descriptions cite representative tools; a rename must not leave the tooltip lying."""
+        by_group = _tool_names_by_group()
+        for value, _label, description in self.field['items']['enum']:
+            # The sentinel spans every group and also advertises the ungrouped
+            # request escape hatch, so it has no single group to check against.
+            if value == 'all':
+                continue
+            for cited in re.findall(r'<code>([a-z0-9_]+)</code>', description):
+                assert cited in by_group[value], f'{value} description cites {cited}, which is not in that group'
+
+    def test_help_text_cites_at_least_two_tools_per_group(self):
+        """A description that names nothing concrete does not tell an operator what the group covers."""
+        for value, _label, description in self.field['items']['enum']:
+            if value == 'all':
+                continue
+            cited = re.findall(r'<code>([a-z0-9_]+)</code>', description)
+            assert len(cited) >= 2, f'{value} description cites {len(cited)} tools'
 
     def test_default_selection_matches_the_code_default(self):
         assert set(self.field['default']) == DEFAULT_GROUPS
