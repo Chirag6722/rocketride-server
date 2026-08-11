@@ -265,7 +265,7 @@ class DatabaseInstanceBase(IInstanceBase, ABC):
         output_schema={
             'type': 'object',
             'properties': {
-                'rows': {'type': 'array', 'items': {'type': 'object'}},
+                'rows': {'type': 'array', 'items': {'type': ['object', 'array']}},
                 'affected_rows': {'type': 'integer'},
             },
         },
