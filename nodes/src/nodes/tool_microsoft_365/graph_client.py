@@ -382,7 +382,13 @@ def build_auth(svc: GraphService, auth_type: str, cfg: dict, scopes: list[str]) 
         # Fail fast: if the token is already expired and there is no refresh path
         # (no broker URL and no refresh_token), the first Graph call would fail
         # with a cryptic error. Surface a clear message now.
-        is_expired = expiry_ms is not None and (float(expiry_ms) / 1000.0) < _time.time()
+        try:
+            is_expired = expiry_ms is not None and (float(expiry_ms) / 1000.0) < _time.time()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f'{svc.product}: your Microsoft account authorization has an invalid expiry_date '
+                f'({expiry_ms!r}). Please disconnect and reconnect your Microsoft account.'
+            ) from exc
         if is_expired and not (broker_url and refresh_token):
             raise ValueError(
                 f'{svc.product} access token has expired. Please reconnect your Microsoft account in the node settings.'
@@ -458,7 +464,16 @@ def request(
             status = exc.code
             if status in _RETRY_STATUSES and attempt < 3:
                 retry_after = exc.headers.get('Retry-After') if exc.headers else None
-                _time.sleep(float(retry_after) if retry_after else base_delay * (2**attempt))
+                delay = base_delay * (2**attempt)
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        # Graph may send an HTTP-date instead of a delta-seconds
+                        # value; fall back to the exponential backoff delay
+                        # rather than raising out of the retry loop.
+                        pass
+                _time.sleep(delay)
                 continue
             detail = ''
             try:

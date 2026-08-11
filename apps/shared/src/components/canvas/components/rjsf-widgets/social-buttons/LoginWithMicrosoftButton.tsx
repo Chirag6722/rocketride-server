@@ -76,7 +76,7 @@ IconButtonProps<T, S, F> & { formContext?: Record<string, any> }) {
 	// restore state on callback. Credential fields are stripped at any depth:
 	// the URL lands in browser history and broker logs, so existing tokens must
 	// never ride along.
-	const CREDENTIAL_KEYS = ['accessToken', 'refreshToken', 'userToken', 'idToken', 'tokenExpiry'];
+	const CREDENTIAL_KEYS = ['accessToken', 'refreshToken', 'userToken', 'idToken', 'tokenExpiry', 'clientSecret'];
 	const serviceParam = JSON.stringify(formValues, (key, value) => (CREDENTIAL_KEYS.includes(key) ? undefined : value));
 
 	const handleHybridSignIn = useCallback(async () => {

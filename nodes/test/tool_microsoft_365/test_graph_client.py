@@ -177,6 +177,11 @@ class TestBrokerUserAuth:
         granted, ok, missing = gc.token_scope_report(SVC, self._payload(), ['Files.Read'])
         assert 'Files.ReadWrite' in granted and ok and missing == []
 
+    def test_garbage_expiry_date_raises_readable_error(self):
+        cfg = self._payload(expiry_date='not-a-number')
+        with pytest.raises(ValueError, match='Excel.*Please disconnect and reconnect your Microsoft account'):
+            gc.build_auth(SVC, 'user', cfg, [])
+
 
 class TestUserBase:
     def test_user_auth_is_me(self):
@@ -209,6 +214,18 @@ class TestRequest:
         with mock.patch.object(gc, '_urlopen', side_effect=[err, _resp({'ok': 1})]) as u:
             assert gc.request(SVC, self._auth(), 'GET', '/me') == {'ok': 1}
             assert u.call_count == 2
+
+    def test_retries_429_with_http_date_retry_after_falls_back_to_backoff(self):
+        # Graph may send an HTTP-date instead of delta-seconds; float() would
+        # raise. Must fall back to exponential backoff instead of erroring.
+        err = urllib.error.HTTPError('u', 429, 'throttle', {'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT'}, None)
+        with (
+            mock.patch.object(gc, '_urlopen', side_effect=[err, _resp({'ok': 1})]) as u,
+            mock.patch.object(gc._time, 'sleep') as sleep,
+        ):
+            assert gc.request(SVC, self._auth(), 'GET', '/me') == {'ok': 1}
+            assert u.call_count == 2
+            sleep.assert_called_once_with(1.0)  # base_delay * 2**0
 
     def test_403_names_scope_fix(self):
         import io

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import functools
 import io
+import urllib.parse
 import zipfile
 
 from .. import graph_client
@@ -41,9 +42,16 @@ request = functools.partial(graph_client.request, SERVICE)
 
 
 def wb(base: str, file: str) -> str:
-    """Workbook URL prefix for a drive path ('Reports/q3.xlsx') or item id."""
+    """Workbook URL prefix for a drive path ('Reports/q3.xlsx') or item id.
+
+    A path may have multiple already-valid segments, so each segment is
+    percent-encoded (``safe='/'`` preserves the separators) before being
+    interpolated into the ``root:/{path}:`` addressing form — an unencoded
+    space raises ``http.client.InvalidURL`` and an unencoded ``#`` truncates
+    the path, silently addressing the wrong item.
+    """
     if '/' in file or file.lower().endswith('.xlsx'):
-        return f'{base}/drive/root:/{file}:/workbook'
+        return f'{base}/drive/root:/{urllib.parse.quote(file, safe="/")}:/workbook'
     return f'{base}/drive/items/{file}/workbook'
 
 

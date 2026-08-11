@@ -50,10 +50,15 @@ def it(base: str, item: str) -> str:
     """Item address for a drive path ('Docs/report.docx', containing '/') or a single-segment item id.
 
     Mirrors onedrive/client.py's ``it()`` helper — defined locally here per
-    the Task 9 brief rather than importing across service subpackages.
+    the Task 9 brief rather than importing across service subpackages. A path
+    may have multiple already-valid segments, so each segment is
+    percent-encoded (``safe='/'`` preserves the separators) before being
+    interpolated into the ``root:/{path}:`` addressing form — an unencoded
+    space raises ``http.client.InvalidURL`` and an unencoded ``#`` truncates
+    the path, silently addressing the wrong item.
     """
     if '/' in item:
-        return f'{base}/drive/root:/{item}:'
+        return f'{base}/drive/root:/{urllib.parse.quote(item, safe="/")}:'
     return f'{base}/drive/items/{_seg(item)}'
 
 

@@ -58,12 +58,15 @@ def _seg(value: str) -> str:
 def it(base: str, item: str) -> str:
     """Item address for a drive path ('Docs/a.pdf', containing '/') or a single-segment item id.
 
-    Paths are left unencoded (they may contain multiple already-valid
-    segments, mirroring excel/client.py's ``wb()``); a bare item id is a
-    single path component and is URL-escaped.
+    A path may have multiple already-valid segments, so each segment is
+    percent-encoded (``safe='/'`` preserves the separators) before being
+    interpolated into the ``root:/{path}:`` addressing form — an unencoded
+    space raises ``http.client.InvalidURL`` and an unencoded ``#`` truncates
+    the path, silently addressing the wrong item. A bare item id is a single
+    path component and is URL-escaped via ``_seg``.
     """
     if '/' in item:
-        return f'{base}/drive/root:/{item}:'
+        return f'{base}/drive/root:/{urllib.parse.quote(item, safe="/")}:'
     return f'{base}/drive/items/{_seg(item)}'
 
 
