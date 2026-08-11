@@ -134,6 +134,36 @@ def test_to_sqlalchemy_text_maps_placeholders():
     assert binds2['b1'] == 1 and binds2['b10'] == 10 and binds2['b11'] == 11
 
 
+@pytest.mark.parametrize(
+    'sql,params,expected_sql,expected_binds',
+    [
+        ('select $1', [5], 'select :b1', {'b1': 5}),
+        (
+            "update t set note = 'costs $1 per unit' where id = $1",
+            [7],
+            "update t set note = 'costs $1 per unit' where id = :b1",
+            {'b1': 7},
+        ),
+        ("select 'it''s $1' , $1", [3], "select 'it''s $1' , :b1", {'b1': 3}),
+        ('select $$body $1$$, $1', [2], 'select $$body $1$$, :b1', {'b1': 2}),
+        ('select $tag$x $1$tag$, $1', [2], 'select $tag$x $1$tag$, :b1', {'b1': 2}),
+        ('select $1 -- not $2\n', [1], 'select :b1 -- not $2\n', {'b1': 1}),
+        ('select /* $2 /* $3 */ */ $1', [1], 'select /* $2 /* $3 */ */ :b1', {'b1': 1}),
+        ('select "col$1", $1', [4], 'select "col$1", :b1', {'b1': 4}),
+        ("select E'\\' $1' , $1", [9], "select E'\\' $1' , :b1", {'b1': 9}),
+    ],
+)
+def test_placeholder_rewrite_skips_quoted_regions(sql, params, expected_sql, expected_binds):
+    clause, binds = to_sqlalchemy_text(sql, params)
+    assert str(clause) == str(text(expected_sql)) or clause.text == expected_sql
+    assert binds == expected_binds
+
+
+def test_placeholder_out_of_range_raises():
+    with pytest.raises(ValueError, match=r'\$3'):
+        to_sqlalchemy_text('select $3', [1])
+
+
 def test_begin_conn_leak_on_begin_failure():
     """If conn.begin() raises, conn.close() must be called and nothing stored."""
     boom = RuntimeError('begin failed')

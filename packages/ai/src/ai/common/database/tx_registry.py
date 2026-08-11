@@ -32,8 +32,6 @@ from dataclasses import dataclass, field
 from sqlalchemy import text
 from sqlalchemy.sql.elements import TextClause
 
-_PLACEHOLDER = re.compile(r'\$(\d+)')
-
 _SAVEPOINT_STMT = re.compile(
     r'^\s*(?:(?P<sp>savepoint)|(?P<rel>release)\s+savepoint|(?P<rb>rollback)\s+to\s+savepoint)'
     r'\s+(?P<name>[A-Za-z_][\w]*)\s*;?\s*$',
@@ -41,26 +39,98 @@ _SAVEPOINT_STMT = re.compile(
 )
 
 
+def _rewrite_placeholders(sql: str, params: list, binds: dict) -> str:
+    """Rewrite $n → :bn outside strings, identifiers, and comments."""
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "'":  # single-quoted string ('' doubling; E'...' backslash)
+            is_escape_string = out and out[-1] and out[-1][-1] in 'eE'
+            j = i + 1
+            while j < n:
+                if is_escape_string and sql[j] == '\\':
+                    j += 2
+                    continue
+                if sql[j] == "'":
+                    if j + 1 < n and sql[j + 1] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(sql[i:j])
+            i = j
+        elif ch == '"':  # quoted identifier ("" doubling)
+            j = i + 1
+            while j < n:
+                if sql[j] == '"':
+                    if j + 1 < n and sql[j + 1] == '"':
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(sql[i:j])
+            i = j
+        elif ch == '-' and sql[i : i + 2] == '--':
+            j = sql.find('\n', i)
+            j = n if j == -1 else j
+            out.append(sql[i:j])
+            i = j
+        elif ch == '/' and sql[i : i + 2] == '/*':  # nested block comments
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if sql[j : j + 2] == '/*':
+                    depth += 1
+                    j += 2
+                elif sql[j : j + 2] == '*/':
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            out.append(sql[i:j])
+            i = j
+        elif ch == '$':
+            m = re.match(r'\$(\d+)', sql[i:])
+            if m:  # $<digits> is never a dollar-quote tag (tags cannot start with a digit)
+                idx = int(m.group(1))
+                if idx < 1 or idx > len(params):
+                    raise ValueError(f'placeholder ${idx} out of range for {len(params)} param(s)')
+                key = f'b{idx}'
+                binds[key] = params[idx - 1]
+                out.append(f':{key}')
+                i += m.end()
+                continue
+            tag = re.match(r'\$([A-Za-z_][\w]*)?\$', sql[i:])
+            if tag:  # dollar-quoted body — copy through to the closing tag
+                delim = tag.group(0)
+                end = sql.find(delim, i + len(delim))
+                j = n if end == -1 else end + len(delim)
+                out.append(sql[i:j])
+                i = j
+            else:
+                out.append(ch)
+                i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return ''.join(out)
+
+
 def to_sqlalchemy_text(sql: str, params: list | None) -> tuple[TextClause, dict]:
     """Convert Postgres-style ``$1..$n`` placeholders to SQLAlchemy binds.
 
     Server-side binding means we never inline/escape values into SQL — the
     client forwards parameter values and the database driver binds them.
-    Caveat: a literal ``$n`` inside a string/dollar-quoted body would also be
-    rewritten; Sequelize-generated SQL uses clean ``$n`` placeholders so this
-    is acceptable for the dialect's traffic.
+    The rewrite is quote-aware: ``$n`` inside string literals, quoted
+    identifiers, dollar-quoted bodies, and comments is left untouched, and an
+    index past ``len(params)`` raises ``ValueError`` instead of corrupting.
     """
     if not params:
         return text(sql), {}
     binds: dict = {}
-
-    def _sub(m: re.Match) -> str:
-        idx = int(m.group(1))
-        key = f'b{idx}'
-        binds[key] = params[idx - 1]
-        return f':{key}'
-
-    return text(_PLACEHOLDER.sub(_sub, sql)), binds
+    return text(_rewrite_placeholders(sql, params, binds)), binds
 
 
 def shape_execute_result(result, max_rows: int, row_mode: str = 'object') -> dict | None:
