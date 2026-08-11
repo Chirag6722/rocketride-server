@@ -11,8 +11,11 @@ date: 2026-08-07
 - [Prerequisites](#prerequisites)
 - [Examples](#examples)
   - [Define a schema and query rows](#define-a-schema-and-query-rows)
+  - [Writes and row counts](#writes-and-row-counts)
+  - [Handling query errors](#handling-query-errors)
   - [Transactions](#transactions)
   - [Nested transactions and isolation config](#nested-transactions-and-isolation-config)
+- [Limitations](#limitations)
 - [Related Methods](#related-methods)
 
 ## Overview
@@ -45,6 +48,7 @@ drizzle(options: {
 | `schema`  | `DrizzleConfig['schema']` | No | Drizzle schema object enabling the relational query API (`db.query.*`).            |
 | `logger`  | `boolean \| Logger` | No  | `true` for Drizzle's `DefaultLogger`, or a custom `Logger`.                                  |
 | `casing`  | `DrizzleConfig['casing']` | No | Column-name casing convention passed through to the Drizzle dialect.               |
+| `cache`   | `DrizzleConfig['cache']` | No | A Drizzle [cache](https://orm.drizzle.team/docs/cache) instance; forwarded to every prepared query so reads and writes alike consult it. |
 
 ## Prerequisites
 
@@ -87,6 +91,40 @@ await client.terminate(token);
 await client.disconnect();
 ```
 
+### Writes and row counts
+
+Statements without `.returning()` — `db.execute()`, plain `insert`/`update`/`delete` — resolve to `{ rows, rowCount }`, matching node-postgres. `rowCount` is `rows.length` for row-returning statements; otherwise it's the server's affected-row count. Selects and `.returning()` queries still resolve to a plain array of rows.
+
+```typescript
+const result = await db.execute(sql`update accounts set balance = balance - 100 where id = ${1} and balance >= 100`);
+
+if (result.rowCount === 0) {
+	// No row matched the predicate — optimistic-lock miss. Retry the read or
+	// surface a conflict to the caller.
+	throw new Error('stale balance read, retry the transfer');
+}
+```
+
+### Handling query errors
+
+Failed statements surface as Drizzle's `DrizzleQueryError` — its `message` is `Failed query: ...` and does **not** include the original error text. Read `err.cause` for the actual error the pipeline returned:
+
+```typescript
+import { DrizzleQueryError } from 'drizzle-orm';
+
+try {
+	await db.select().from(users).where(eq(users.id, badId));
+} catch (err) {
+	if (err instanceof DrizzleQueryError) {
+		console.error(err.message); // "Failed query: select ... params: ..."
+		console.error(err.cause); // the original error from the pipeline
+	}
+	throw err;
+}
+```
+
+This wrapping is upstream Drizzle behavior — it applies whether or not a `cache` is configured.
+
 ### Transactions
 
 Transactions are forwarded through the pipeline's `begin`/`commit`/`rollback` tool functions. Use `db.transaction()` exactly as you would with any Drizzle driver — if the callback throws, the transaction is automatically rolled back:
@@ -100,6 +138,10 @@ await db.transaction(async (tx) => {
 	// Throwing here rolls the whole transaction back.
 });
 ```
+
+If the callback throws, the driver rolls back and re-throws your original error — a failure during that rollback (the session already discarded, transport down) is swallowed rather than replacing it, so `catch` always sees the error that caused the rollback, not a secondary one.
+
+A transaction session left open with no activity is rolled back and reaped by the server after an idle timeout (300s by default); recover from a session that outlived it the same way you'd handle any other rollback failure.
 
 ### Nested transactions and isolation config
 
@@ -121,6 +163,26 @@ await db.transaction(
 	{ isolationLevel: 'serializable' }
 );
 ```
+
+Savepoint recovery works the same way for a real SQL error, not just a thrown JS error — a failing statement (e.g. a unique-constraint violation) doesn't kill the whole transaction: the server keeps the session alive after Postgres marks it aborted, the driver rolls back to the savepoint, and the outer transaction continues:
+
+```typescript
+await db.transaction(async (tx) => {
+	await tx.insert(orders).values({ id: 1 });
+	try {
+		await tx.transaction(async (tx2) => {
+			await tx2.insert(orders).values({ id: 1 }); // duplicate key — a real SQL error
+		});
+	} catch (err) {
+		// savepoint rolled back; outer transaction is still usable
+	}
+	await tx.insert(orders).values({ id: 2 });
+});
+```
+
+## Limitations
+
+- **No binary parameters.** Queries transport as JSON, so `Buffer`/`bytea` parameters aren't supported — the server rejects them with a bind error rather than silently coercing or dropping them. Encode binary data (e.g. base64 into a `text`/`bytea`-via-`decode()` column) before binding it.
 
 ## Related Methods
 
