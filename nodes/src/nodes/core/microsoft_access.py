@@ -51,9 +51,7 @@ class AccessSpec:
     def __post_init__(self) -> None:
         """Validate the spec at construction."""
         if not self.scopes:
-            raise MicrosoftAccessError(
-                'AccessSpec.scopes must declare at least one tier'
-            )
+            raise MicrosoftAccessError('AccessSpec.scopes must declare at least one tier')
         if self.default not in self.scopes:
             raise MicrosoftAccessError(
                 f'AccessSpec default tier {self.default!r} is not a defined tier; expected one of {sorted(self.scopes)}'
@@ -136,9 +134,7 @@ def resolve_microsoft_access(config: dict, spec: AccessSpec) -> MicrosoftAccess:
     """Resolve a node's config + AccessSpec into a MicrosoftAccess (scopes + gates)."""
     tier = (str(config.get('access') or '').strip()) or spec.default
     if tier not in spec.scopes:
-        raise MicrosoftAccessError(
-            f'unknown access tier {tier!r}; expected one of {sorted(spec.scopes)}'
-        )
+        raise MicrosoftAccessError(f'unknown access tier {tier!r}; expected one of {sorted(spec.scopes)}')
     return MicrosoftAccess(
         tier=tier,
         scopes=list(spec.scopes[tier]),
