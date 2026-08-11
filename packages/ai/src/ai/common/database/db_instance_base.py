@@ -385,6 +385,10 @@ class DatabaseInstanceBase(IInstanceBase, ABC):
         """Convert a single database value to a JSON-serializable type."""
         if val is None or isinstance(val, (str, int, float, bool)):
             return val
+        if isinstance(val, (dict, list)):
+            # psycopg2 parses json/jsonb into dict/list; repr() is not JSON and
+            # silently corrupts ORM clients that JSON.parse driver values.
+            return json.dumps(val, default=str)
         if hasattr(val, '__float__'):
             return float(val)
         if hasattr(val, 'isoformat'):

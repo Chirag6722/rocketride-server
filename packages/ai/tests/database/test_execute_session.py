@@ -260,3 +260,28 @@ def test_execute_tool_session_array_row_mode(instance_with_sqlite_registry):
 def test_execute_tool_rejects_bad_row_mode(instance_with_sqlite_registry):
     with pytest.raises(ValueError, match='row_mode'):
         instance_with_sqlite_registry.execute({'sql': 'SELECT 1', 'row_mode': 'csv'})
+
+
+# ---------------------------------------------------------------------------
+# (f) _sanitize_value JSON-encodes dicts and lists (psycopg2 json/jsonb parse)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_value_json_encodes_dicts():
+    """Dict values must be JSON-encoded, not Python repr'd."""
+    result = DatabaseInstanceBase._sanitize_value({'a': 1})
+    assert result == '{"a": 1}'
+
+
+def test_sanitize_value_json_encodes_lists():
+    """List values must be JSON-encoded, not Python repr'd."""
+    result = DatabaseInstanceBase._sanitize_value([1, 'x'])
+    assert result == '[1, "x"]'
+
+
+def test_sanitize_value_json_encodes_nested_with_fallback():
+    """Nested non-JSON types fall back to str via default=str."""
+    import datetime
+
+    result = DatabaseInstanceBase._sanitize_value({'t': datetime.date(2026, 1, 1)})
+    assert '"2026-01-01"' in result
