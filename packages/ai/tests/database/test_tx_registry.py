@@ -219,3 +219,121 @@ def test_registry_execute_array_mode():
         assert shaped['rows'] == [[1, 'x'], [2, 'y']]
     finally:
         reg.rollback(sid)
+
+
+class _FakeNestedTx:
+    """Recording stand-in for a SQLAlchemy NestedTransaction (SAVEPOINT)."""
+
+    def __init__(self):
+        self.committed = False
+        self.rolled_back = False
+        self.is_active = True
+
+    def commit(self):
+        self.committed = True
+        self.is_active = False
+
+    def rollback(self):
+        self.rolled_back = True
+        self.is_active = False
+
+
+class _FakeTrans:
+    """Recording stand-in for the root SQLAlchemy transaction."""
+
+    def __init__(self):
+        self.committed = False
+        self.rolled_back = False
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+class _FakeConn:
+    """Recording stand-in for a SQLAlchemy Connection, tracking begin_nested()."""
+
+    def __init__(self):
+        self.begin_nested_calls = 0
+        self.nested = []
+        self.closed = False
+
+    def begin(self):
+        return _FakeTrans()
+
+    def begin_nested(self):
+        self.begin_nested_calls += 1
+        nested = _FakeNestedTx()
+        self.nested.append(nested)
+        return nested
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeEngine:
+    """Recording stand-in for a SQLAlchemy Engine; exposes the last connection."""
+
+    def __init__(self):
+        self.last_conn = None
+
+    def connect(self):
+        self.last_conn = _FakeConn()
+        return self.last_conn
+
+
+@pytest.fixture
+def registry_and_engine():
+    eng = _FakeEngine()
+    reg = TransactionRegistry(eng, max_rows=1000)
+    return reg, eng
+
+
+def test_savepoint_statement_is_intercepted(registry_and_engine):
+    reg, eng = registry_and_engine
+    sid = reg.begin()
+    out = reg.execute(sid, 'savepoint sp1')
+    assert out == {'rows': [], 'affected_rows': 0}
+    assert eng.last_conn.begin_nested_calls == 1  # not executed as raw SQL
+
+
+def test_release_savepoint_commits_nested(registry_and_engine):
+    reg, eng = registry_and_engine
+    sid = reg.begin()
+    reg.execute(sid, 'savepoint sp1')
+    reg.execute(sid, 'release savepoint sp1')
+    assert eng.last_conn.nested[0].committed
+
+
+def test_rollback_to_savepoint_rolls_back_nested(registry_and_engine):
+    reg, eng = registry_and_engine
+    sid = reg.begin()
+    reg.execute(sid, 'savepoint sp1')
+    reg.execute(sid, 'ROLLBACK TO SAVEPOINT sp1;')
+    assert eng.last_conn.nested[0].rolled_back
+
+
+def test_rollback_to_unknown_savepoint_raises(registry_and_engine):
+    reg, _ = registry_and_engine
+    sid = reg.begin()
+    with pytest.raises(ValueError, match='unknown savepoint'):
+        reg.execute(sid, 'rollback to savepoint nope')
+
+
+def test_nested_savepoints_unwind_lifo(registry_and_engine):
+    reg, eng = registry_and_engine
+    sid = reg.begin()
+    reg.execute(sid, 'savepoint sp1')
+    reg.execute(sid, 'savepoint sp2')
+    reg.execute(sid, 'rollback to savepoint sp1')
+    assert eng.last_conn.nested[1].rolled_back and eng.last_conn.nested[0].rolled_back
+
+
+def test_session_rollback_resolves_open_savepoints(registry_and_engine):
+    reg, eng = registry_and_engine
+    sid = reg.begin()
+    reg.execute(sid, 'savepoint sp1')
+    reg.rollback(sid)  # must not raise; nested resolved before root rollback
+    assert eng.last_conn.closed

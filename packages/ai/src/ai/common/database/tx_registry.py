@@ -34,6 +34,12 @@ from sqlalchemy.sql.elements import TextClause
 
 _PLACEHOLDER = re.compile(r'\$(\d+)')
 
+_SAVEPOINT_STMT = re.compile(
+    r'^\s*(?:(?P<sp>savepoint)|(?P<rel>release)\s+savepoint|(?P<rb>rollback)\s+to\s+savepoint)'
+    r'\s+(?P<name>[A-Za-z_][\w]*)\s*;?\s*$',
+    re.IGNORECASE,
+)
+
 
 def to_sqlalchemy_text(sql: str, params: list | None) -> tuple[TextClause, dict]:
     """Convert Postgres-style ``$1..$n`` placeholders to SQLAlchemy binds.
@@ -84,6 +90,8 @@ class _Held:
     last_used: float
     # Serialises calls on THIS session only; other sessions run concurrently.
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Stack of (name, NestedTransaction) for open SAVEPOINTs, oldest first.
+    savepoints: list = field(default_factory=list)
 
 
 class TransactionRegistry:
@@ -136,6 +144,11 @@ class TransactionRegistry:
             with self._registry_lock:
                 if self._sessions.get(session_id) is not held:
                     raise KeyError(session_id)  # finalised/reaped while we waited
+            m = _SAVEPOINT_STMT.match(sql)
+            if m:
+                self._handle_savepoint(held, m)
+                held.last_used = self._clock()
+                return {'rows': [], 'affected_rows': 0}
             clause, binds = to_sqlalchemy_text(sql, params)
             result = held.conn.execute(clause, binds)
             held.last_used = self._clock()
@@ -180,6 +193,30 @@ class TransactionRegistry:
             with held.lock:
                 self._drop(sid, held, commit=False)
 
+    @staticmethod
+    def _handle_savepoint(held: _Held, m: re.Match) -> None:
+        """Map savepoint statements onto SQLAlchemy nested transactions.
+
+        Raw SAVEPOINT SQL cannot recover a connection after a DBAPI error
+        (SQLAlchemy raises PendingRollbackError); ``begin_nested()`` is the
+        supported path. Deviation from Postgres: ROLLBACK TO releases the
+        savepoint instead of keeping it re-rollbackable — the Drizzle driver
+        uses each savepoint exactly once, so this never observably differs.
+        """
+        name = m.group('name').lower()
+        if m.group('sp'):
+            held.savepoints.append((name, held.conn.begin_nested()))
+            return
+        for i in range(len(held.savepoints) - 1, -1, -1):
+            if held.savepoints[i][0] == name:
+                unwound = held.savepoints[i:]
+                del held.savepoints[i:]
+                for _, sp in reversed(unwound):
+                    if sp.is_active:
+                        sp.commit() if m.group('rel') else sp.rollback()
+                return
+        raise ValueError(f'unknown savepoint: {name}')
+
     def _require(self, session_id: str) -> _Held:
         with self._registry_lock:
             held = self._sessions.get(session_id)
@@ -204,6 +241,10 @@ class TransactionRegistry:
                 return False
             del self._sessions[session_id]
         try:
+            for _, sp in reversed(held.savepoints):
+                if sp.is_active:
+                    sp.commit() if commit else sp.rollback()
+            held.savepoints.clear()
             held.trans.commit() if commit else held.trans.rollback()
         finally:
             held.conn.close()
