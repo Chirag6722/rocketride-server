@@ -28,6 +28,7 @@ import { getLogger } from '../shared/util/output';
 import { renderTemplate } from 'shared/modules/appdev/templates';
 import type { FrameOptions, TemplateName } from 'shared/modules/appdev/templates';
 import { getExtensionContext } from '../extension';
+import { ensureAppMarker } from './appMarker';
 import { vendorAppTypes } from './appTypes';
 import { getWatchManager } from './watchManager';
 
@@ -35,8 +36,9 @@ import { getWatchManager } from './watchManager';
 // VALIDATION
 // =============================================================================
 
-/** App id shape: `<publisher>.<name>` — lowercase, digits, hyphens per segment. */
-export const APP_ID_RE = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
+/** App id shape: `<publisher>.<name>` — publisher is letters+underscore
+ * (matches the server developerId rule); name is lowercase/digits/hyphens. */
+export const APP_ID_RE = /^[a-z][a-z_]*\.[a-z][a-z0-9-]*$/;
 
 // =============================================================================
 // TYPES
@@ -281,6 +283,11 @@ export async function scaffoldApp(params: ScaffoldParams): Promise<string> {
 		const uri = vscode.Uri.joinPath(target, ...file.path.split('/'));
 		await vscode.workspace.fs.writeFile(uri, Buffer.from(file.content, 'utf8'));
 	}
+
+	// The .rrapp marker is generated AT CREATION (id + working-copy
+	// projectId) — deploy provenance never depends on the app having been
+	// opened in the App Builder first.
+	await ensureAppMarker(target.fsPath, appId);
 
 	// F5 debug config lives in the WORKSPACE root's .vscode/launch.json —
 	// VSCode only surfaces launch configs from workspace-folder roots, so an

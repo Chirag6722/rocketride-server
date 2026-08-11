@@ -163,11 +163,12 @@ const Shell: React.FC<ShellProps> = ({ config }) => {
 	const [sessionAppId] = useState<string>(() => {
 		const params = new URLSearchParams(window.location.search);
 		const fromUrl = params.get('appId') || params.get('appid') || '';
-		// Deep-link version pin (?appid=X&version=1.3.0) — seed/replace the
-		// session override; the post-auth mint effect below resolves it to a
-		// signed entry URL (the server accepts semver, 'v' prefix tolerated).
-		const versionParam = params.get('version') || '';
-		if (fromUrl && versionParam) {
+		// Deep-link version pin (?appid=X&version=7) — REGISTRY INTS ONLY
+		// (semver is developer-controlled display and never a wire identity).
+		// Non-numeric values are ignored; the post-auth mint effect below
+		// resolves the int to a signed entry URL.
+		const versionParam = Number.parseInt(params.get('version') ?? '', 10);
+		if (fromUrl && Number.isInteger(versionParam) && versionParam > 0) {
 			setAppVersionOverride(fromUrl, { version: versionParam });
 		}
 		if (fromUrl) {
@@ -303,11 +304,13 @@ const Shell: React.FC<ShellProps> = ({ config }) => {
 
 			// Run the auth bootstrap
 			try {
+				console.log('[boot] Shell: cm.bootstrap START; config.apps ids =', (config.apps ?? []).map((a) => a.id), 'capabilities =', config.capabilities);
 				const result = await cm.bootstrap({
 					apps: config.apps,
 					workspaceDir: config.workspaceDir,
 					onThemeChange: config.themeConfig?.onThemeChange,
 				});
+				console.log('[boot] Shell: cm.bootstrap RETURNED', result ? { hasResult: true, appId: result.appId, apps: (result.result?.apps ?? []).map((a: { id: string }) => a.id) } : null);
 				if (!mountedRef.current) return;
 
 				// Popup completion: deliver the session to the opener's iframe
@@ -559,6 +562,8 @@ const Shell: React.FC<ShellProps> = ({ config }) => {
 	// frame, so a user-gesture button opens this origin as an auth POPUP
 	// ('rrauth' — see the bootstrap popup role); the popup hands the session
 	// back over BroadcastChannel and this shell reboots authenticated.
+	console.log('[boot] Shell render:', { renderPhase, hasIdentity: !!identity, isSaas, defaultAppId, activeAppId, showApiKeyLogin, showEmbeddedSignIn });
+
 	if (showEmbeddedSignIn) {
 		return (
 			<div style={styles.statusScreen}>

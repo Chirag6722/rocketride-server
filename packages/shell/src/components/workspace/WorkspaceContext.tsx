@@ -344,6 +344,7 @@ export const WorkspaceProvider: React.FC<IWorkspaceProviderProps> = ({ apps, wor
 	 *          flight; false when the app is unavailable (failed / unknown).
 	 */
 	const loadDescriptor = useCallback(async (appId: string): Promise<boolean> => {
+		console.log('[WS-ctx] loadDescriptor(', appId, ') — manifest ids:', apps.map((a) => a.id), 'cached:', !!loadedAppsRef.current[appId], 'inFlight:', loadingMapRef.current.has(appId), 'failed:', failedSetRef.current.has(appId));
 		// Skip if already loaded
 		if (loadedAppsRef.current[appId]) { return true; }
 		// A load is already in flight: await ITS outcome rather than reporting
@@ -355,7 +356,8 @@ export const WorkspaceProvider: React.FC<IWorkspaceProviderProps> = ({ apps, wor
 		if (failedSetRef.current.has(appId)) { return false; }
 		// Find the manifest entry
 		const entry = apps.find((a) => a.id === appId);
-		if (!entry) return false;
+		if (!entry) { console.log('[WS-ctx] loadDescriptor: NO MANIFEST ENTRY for', appId, '→ return false (silent)'); return false; }
+		console.log('[WS-ctx] loadDescriptor: entry FOUND for', appId, '— loading remote', { moduleId: entry.moduleId, entryUrl: (entry as { entry?: string }).entry });
 
 		// Forward-compat gate: an app stamped with a NEWER shell-api version
 		// than this shell provides would load, then hit undefined API members
@@ -478,6 +480,7 @@ export const WorkspaceProvider: React.FC<IWorkspaceProviderProps> = ({ apps, wor
 	// Load the active app's descriptor once workspace state is ready
 	// (seeded is enough — don't wait for the full disk load)
 	useEffect(() => {
+		console.log('[WS-ctx] auto-load effect', { loaded, seeded, activeAppId, isConnected, hasClient: !!client, manifestLen: apps.length, manifestIds: apps.map((a) => a.id) });
 		if (loaded || seeded) loadDescriptor(activeAppId);
 	}, [loaded, seeded, activeAppId, loadDescriptor]);
 

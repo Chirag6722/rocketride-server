@@ -846,7 +846,7 @@ export class ProjectProvider implements vscode.CustomTextEditorProvider {
 									?.replace(/\.pipe(?:\.json)?$/, '') ||
 								document.uri.path,
 						};
-						await deployClient.deploy.publish(pipeline, { ...(data.comment ? { comment: data.comment as string } : {}), ...(data.deployTo ? { deployTo: data.deployTo as string } : {}) });
+						await deployClient.deploy.add({ pipeline, ...(data.comment ? { comment: data.comment as string } : {}), ...(data.deployTo ? { deployTo: data.deployTo as string } : {}) });
 						webview.postMessage({ type: 'deploy:actionResult', requestId: data.requestId });
 						// Re-push the lifecycle so the strip/history show the new truth.
 						await this.sendDeployData(webview, editorState);

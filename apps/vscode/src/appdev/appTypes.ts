@@ -322,6 +322,30 @@ export function extractInstallCause(output: string, code: number | null): string
 }
 
 /**
+ * True when pnpm install output carries a TRANSIENT Windows file-lock
+ * signature rather than a genuine dependency or build failure.
+ *
+ * On Windows another process routinely holds a short-lived handle on a file
+ * under `node_modules/.pnpm` — antivirus scanning a just-written file, the
+ * Search indexer, or an editor watching the tree — so pnpm's atomic
+ * rename/unlink step fails with EPERM/EBUSY/ENOTEMPTY even though the
+ * dependency graph is sound. The handle is released moments later and a fresh
+ * install succeeds, so the caller may safely retry ONLY this class of error.
+ * A resolution error, a missing package, or a build failure never matches and
+ * so is never retried.
+ *
+ * @param output - Combined stdout+stderr of the failed pnpm run.
+ * @returns True when the failure is a retriable transient lock.
+ */
+export function isTransientLockError(output: string): boolean {
+	// Both halves must hold: the errno AND a filesystem op it aborted — an
+	// unrelated line merely containing "EPERM" in prose does not qualify.
+	const errno = /\b(EPERM|EBUSY|ENOTEMPTY)\b/.test(output);
+	const fsOp = /(rename|unlink|operation not permitted|resource busy|directory not empty)/i.test(output);
+	return errno && fsOp;
+}
+
+/**
  * Downloads the connected server's shell.tgz to the workspace's canonical
  * .rocketride/shell/shell.tgz and installs it at the workspace root.
  *

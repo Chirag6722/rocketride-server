@@ -9,7 +9,7 @@
  * Per app: runs `rsbuild dev` in the app's folder (serves the MF remote on
  * its dev port and rebuilds on save), parses the process output for the dev
  * URL and build results, keeps the developer's PERSONAL dev overlay pointed
- * at the served bundle via `rrext_app_submission.register_dev` (re-registered
+ * at the served bundle via `rrext_deploy_app.register_dev` (re-registered
  * on every rebuild — that also keeps the overlay's idle TTL alive), and
  * notifies the App Builder panel: watch status for the DEV badge, and a
  * debounced preview reload on each successful rebuild.
@@ -23,7 +23,7 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
 import { ConnectionManager } from '../connection/connection';
-import { extractInstallCause } from './appTypes';
+import { extractInstallCause, isTransientLockError } from './appTypes';
 import { getLogger } from '../shared/util/output';
 import type { ScannedApp } from './appScan';
 import type { AppScreenProvider, AppWatchStatus } from '../providers/AppScreenProvider';
@@ -59,12 +59,21 @@ export class WatchManager {
 	/** Apps mid-start (awaiting the shared install) — guards double-spawns. */
 	private starting = new Set<string>();
 	/**
-	 * Single-flight memo for the WORKSPACE-GLOBAL install: concurrent watch
-	 * starts for several apps await the same `pnpm install` at the workspace
-	 * root. Unlike ensureShell's memo it is INVALIDATABLE — a package.json
-	 * change (or a fresh scaffold) resets it so the next start reinstalls.
+	 * Serialized single-flight memo for the WORKSPACE-GLOBAL install. Concurrent
+	 * watch starts for several apps await the SAME `pnpm install` at the
+	 * workspace root (the apps are workspace members sharing one node_modules),
+	 * and two installs must NEVER overlap — concurrent pnpm runs on one root
+	 * corrupt the store and trip EPERM on Windows during pnpm's atomic renames.
+	 *
+	 * `installGen` is the generation the workspace currently WANTS installed;
+	 * invalidateInstall() bumps it (a package.json change or a rewired shell
+	 * spec). `install` memoizes the run for one generation: when its gen matches
+	 * installGen the memo is reused (concurrent starts collapse into one); when
+	 * a newer generation is requested the fresh run is CHAINED onto the tail of
+	 * any in-flight one rather than started concurrently.
 	 */
-	private installPromise: Promise<boolean> | null = null;
+	private install: { gen: number; promise: Promise<boolean> } | null = null;
+	private installGen = 0;
 	private connectionManager = ConnectionManager.getInstance();
 	private logger = getLogger();
 
@@ -80,12 +89,16 @@ export class WatchManager {
 	}
 
 	/**
-	 * Invalidates the shared workspace install so the next start (or an
-	 * explicit ensureInstalled) runs `pnpm install` again — called when a
-	 * package.json changes or a fresh app is scaffolded into the workspace.
+	 * Marks the shared workspace install stale so the next start (or an explicit
+	 * ensureInstalled) runs `pnpm install` again — called when a package.json
+	 * changes or a fresh app is scaffolded into the workspace.
+	 *
+	 * Bumps the generation rather than dropping an in-flight install: the
+	 * running pnpm keeps going and the fresh install CHAINS after it (see
+	 * ensureInstalled), so two installs never race on the shared node_modules.
 	 */
 	public invalidateInstall(): void {
-		this.installPromise = null;
+		this.installGen++;
 	}
 
 	/**
@@ -97,15 +110,32 @@ export class WatchManager {
 	 * @returns True when the install succeeded (or was already done).
 	 */
 	public ensureInstalled(triggerAppId?: string): Promise<boolean> {
-		if (!this.installPromise) {
-			this.installPromise = this.runWorkspaceInstall(triggerAppId).then((ok) => {
-				// A failed install must not be memoized as done — the next
-				// start retries instead of trusting a broken node_modules.
-				if (!ok) this.installPromise = null;
+		// Reuse the memo when it already targets the generation the workspace
+		// wants — this collapses concurrent starts at the same generation into
+		// a single install.
+		if (this.install && this.install.gen === this.installGen) return this.install.promise;
+
+		// A newer generation is wanted (or nothing has installed yet): run a
+		// FRESH install, but CHAIN it after any in-flight one so two pnpm
+		// processes never touch the shared node_modules at once. A superseded
+		// in-flight install still runs to completion (cancelling mid-rename is
+		// what corrupts the store); its result is simply discarded — only this
+		// run, targeting `gen`, decides the outcome.
+		const gen = this.installGen;
+		const prior = this.install?.promise ?? Promise.resolve(true);
+		const promise = prior
+			.catch(() => false)
+			.then(() => this.runWorkspaceInstall(triggerAppId))
+			.then((ok) => {
+				// A failed install at the still-current generation must not be
+				// memoized as done — drop it so the next start retries. If a
+				// newer generation has already superseded this run, leave the
+				// memo (now pointing at that newer run) untouched.
+				if (!ok && this.install?.gen === gen) this.install = null;
 				return ok;
 			});
-		}
-		return this.installPromise;
+		this.install = { gen, promise };
+		return promise;
 	}
 
 	/**
@@ -221,7 +251,7 @@ export class WatchManager {
 		try {
 			const client = this.connectionManager.getClient();
 			if (client && this.connectionManager.isConnected()) {
-				await client.call('rrext_app_submission', { subcommand: 'register_dev', moduleId: session.app.moduleId, unregister: true });
+				await client.call('rrext_deploy_app', { subcommand: 'register_dev', moduleId: session.app.moduleId, unregister: true });
 			}
 		} catch { /* engine gone — the overlay's disconnect expiry covers it */ }
 		this.notify(appId, { state: 'idle' });
@@ -263,13 +293,63 @@ export class WatchManager {
 	 * @param triggerAppId - The app that initiated the install (error focus).
 	 * @returns True when the install succeeded (or was a no-op).
 	 */
-	private runWorkspaceInstall(triggerAppId?: string): Promise<boolean> {
+	private async runWorkspaceInstall(triggerAppId?: string): Promise<boolean> {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-		if (!workspaceRoot) return Promise.resolve(false);
+		if (!workspaceRoot) return false;
 		this.appScreen.notifyWatchAll({ state: 'installing' });
 		this.logger.output(`[appdev] pnpm install (workspace) at ${workspaceRoot}${triggerAppId ? ` — triggered by ${triggerAppId}` : ''}`);
 		this.appScreen.notifyConsoleAll('log', `$ pnpm install --prefer-offline  (${workspaceRoot})`);
-		return new Promise<boolean>((resolve) => {
+
+		// Windows holds transient handles on files under node_modules/.pnpm
+		// (antivirus scan, Search indexer, an editor watching the tree), so
+		// pnpm's atomic rename step intermittently fails with EPERM/EBUSY/
+		// ENOTEMPTY even though the dependency graph is fine. The handle clears
+		// on its own, so retry the WHOLE install a few times on that specific
+		// signature — never on a genuine resolution or build failure. A
+		// backoff between attempts gives the OS time to release the handle.
+		const MAX_ATTEMPTS = 3;
+		let result = await this.spawnInstallOnce(workspaceRoot);
+		for (let attempt = 1; !result.ok && attempt < MAX_ATTEMPTS && isTransientLockError(result.output); attempt++) {
+			const note = `pnpm install hit a transient Windows file lock — retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})`;
+			this.logger.output(`[appdev] ${note}`);
+			this.appScreen.notifyConsoleAll('warn', note);
+			await new Promise((r) => setTimeout(r, 1500 * attempt));
+			result = await this.spawnInstallOnce(workspaceRoot);
+		}
+
+		if (result.ok) {
+			this.appScreen.notifyConsoleAll('log', 'pnpm install: done');
+			// Clear the broadcast 'installing' badge; running sessions
+			// immediately re-assert their real state below.
+			this.appScreen.notifyWatchAll({ state: 'idle' });
+			for (const s of this.sessions.values()) {
+				this.notify(s.app.id, { state: s.buildStart ? 'building' : 'ok', target: s.devOrigin?.replace(/^https?:\/\//, '') });
+			}
+			return true;
+		}
+		// A timeout/spawn failure carries its own reason; everything else names
+		// its cause from the accumulated output.
+		const reason = result.failureReason ?? `pnpm install failed: ${extractInstallCause(result.output, result.code)}`;
+		this.logger.output(`[appdev] workspace ${reason}`);
+		if (triggerAppId) this.appScreen.notifyError(triggerAppId, reason, 'pnpm install');
+		this.appScreen.notifyWatchAll({ state: 'error', target: 'pnpm install', reason });
+		return false;
+	}
+
+	/**
+	 * Runs ONE `pnpm install --prefer-offline` at the workspace root and
+	 * resolves to its outcome — never reports to the UI itself, so the caller
+	 * (runWorkspaceInstall) owns retry decisions and the final badge/error.
+	 *
+	 * Installer output still streams live into every panel's Console as it
+	 * arrives, and is accumulated so a failure can name its cause.
+	 *
+	 * @param workspaceRoot - The workspace folder pnpm installs into.
+	 * @returns ok + the combined output + exit code; failureReason is set only
+	 *          for terminal, non-retriable failures (timeout, spawn error).
+	 */
+	private spawnInstallOnce(workspaceRoot: string): Promise<{ ok: boolean; output: string; code: number | null; failureReason?: string }> {
+		return new Promise((resolve) => {
 			// Workspace model: no --ignore-workspace (the root workspace file
 			// claims apps/*), no --no-lockfile (the root lockfile is the
 			// honest record of what the workspace resolves).
@@ -287,17 +367,18 @@ export class WatchManager {
 			proc.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); this.consoleAllLines('warn', chunk.toString('utf8')); });
 			// Settle exactly once — exit, spawn-error, and the timeout race here.
 			let settled = false;
-			const finish = (ok: boolean): void => {
+			const finish = (r: { ok: boolean; output: string; code: number | null; failureReason?: string }): void => {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timer);
-				resolve(ok);
+				resolve(r);
 			};
 			// A stalled install must not wedge the single-flight memo forever —
 			// bound it and surface the failure like any other install error.
 			// shell:true wraps pnpm in cmd.exe on Windows, so SIGKILL fells only
 			// the wrapper while pnpm keeps running — taskkill /T fells the whole
-			// tree, same approach as stop().
+			// tree, same approach as stop(). A timeout is terminal, not a
+			// transient lock, so it carries its own non-retriable reason.
 			const timer = setTimeout(() => {
 				try {
 					if (process.platform === 'win32' && proc.pid) {
@@ -306,39 +387,12 @@ export class WatchManager {
 						proc.kill('SIGKILL');
 					}
 				} catch { /* already gone */ }
-				const reason = 'pnpm install timed out after 10 minutes';
-				this.logger.output('[appdev] workspace pnpm install timed out after 10 minutes');
-				if (triggerAppId) this.appScreen.notifyError(triggerAppId, reason, 'pnpm install');
-				this.appScreen.notifyWatchAll({ state: 'error', target: 'pnpm install', reason });
-				finish(false);
+				finish({ ok: false, output, code: null, failureReason: 'pnpm install timed out after 10 minutes' });
 			}, 10 * 60 * 1000);
 			// 'close' (not 'exit'): stdio is flushed first, so extractInstallCause
 			// reads the COMPLETE output — aligns with publish.ts and runRootInstall.
-			proc.on('close', (code) => {
-				if (code === 0) {
-					this.appScreen.notifyConsoleAll('log', 'pnpm install: done');
-					// Clear the broadcast 'installing' badge; running sessions
-					// immediately re-assert their real state below.
-					this.appScreen.notifyWatchAll({ state: 'idle' });
-					for (const s of this.sessions.values()) {
-						this.notify(s.app.id, { state: s.buildStart ? 'building' : 'ok', target: s.devOrigin?.replace(/^https?:\/\//, '') });
-					}
-					finish(true);
-				} else {
-					const reason = `pnpm install failed: ${extractInstallCause(output, code)}`;
-					this.logger.output(`[appdev] workspace ${reason}`);
-					if (triggerAppId) this.appScreen.notifyError(triggerAppId, reason, 'pnpm install');
-					this.appScreen.notifyWatchAll({ state: 'error', target: 'pnpm install', reason });
-					finish(false);
-				}
-			});
-			proc.on('error', (err) => {
-				const reason = `pnpm could not be started: ${err.message}`;
-				this.logger.output(`[appdev] ${reason}`);
-				if (triggerAppId) this.appScreen.notifyError(triggerAppId, reason, 'pnpm install');
-				this.appScreen.notifyWatchAll({ state: 'error', target: 'pnpm install', reason });
-				finish(false);
-			});
+			proc.on('close', (code) => finish({ ok: code === 0, output, code }));
+			proc.on('error', (err) => finish({ ok: false, output, code: null, failureReason: `pnpm could not be started: ${err.message}` }));
 		});
 	}
 
@@ -463,7 +517,7 @@ export class WatchManager {
 		try {
 			const client = this.connectionManager.getClient();
 			if (!client || !this.connectionManager.isConnected()) return;
-			await client.call('rrext_app_submission', {
+			await client.call('rrext_deploy_app', {
 				subcommand: 'register_dev',
 				moduleId: session.app.moduleId,
 				url: `${session.devOrigin}/remoteEntry.js`,

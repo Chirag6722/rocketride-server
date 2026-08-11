@@ -21,8 +21,9 @@ import { ConnectionManager } from '../connection/connection';
 import { GenericEvent } from '../shared/types';
 import { scanWorkspaceApps } from '../appdev/appScan';
 import type { ScannedApp } from '../appdev/appScan';
+import { ensureAppMarker, markerUriOf } from '../appdev/appMarker';
 import { ensureWatch, getWatchManager } from '../appdev/watchManager';
-import { publishApp } from '../appdev/publish';
+import { deployApp } from '../appdev/publish';
 import { vendorAppTypes } from '../appdev/appTypes';
 import { CloudAuthProvider } from '../auth/CloudAuthProvider';
 
@@ -85,13 +86,11 @@ export class AppScreenProvider implements vscode.CustomReadonlyEditorProvider {
 			return;
 		}
 
-		// The document: <folder>/<name>.rrapp — created on demand
-		const marker = vscode.Uri.joinPath(vscode.Uri.file(app.folder), `${appId.split('.').pop()}.rrapp`);
-		try {
-			await vscode.workspace.fs.stat(marker);
-		} catch {
-			await vscode.workspace.fs.writeFile(marker, Buffer.from(`${JSON.stringify({ id: appId }, null, 2)}\n`, 'utf8'));
-		}
+		// The document: <folder>/<name>.rrapp — created (or projectId-backfilled)
+		// on demand via the one marker owner, so every working copy carries its
+		// client-side identity guid.
+		await ensureAppMarker(app.folder, appId);
+		const marker = markerUriOf(app.folder, appId);
 		await vscode.commands.executeCommand('vscode.openWith', marker, 'rocketride.appBuilder');
 	}
 
@@ -241,19 +240,72 @@ export class AppScreenProvider implements vscode.CustomReadonlyEditorProvider {
 							let value: unknown;
 							switch (method) {
 								case 'listVersions':
-									value = client ? await client.appVersions(appId) : [];
+									value = client ? await client.listDeployments(appId) : [];
 									break;
 								case 'where':
-									value = client ? await client.appWhere(appId) : [];
+									value = client ? await client.whereApp(appId) : [];
 									break;
-								case 'deploy': {
+								case 'deploy':
+									// DEPLOY = copy the built bundle to the server as the next
+									// immutable registry version.
+									value = await deployApp(appId, String(callArgs?.[0] ?? ''));
+									break;
+								case 'submit': {
+									// Submit a deployed version for store review — flips the
+									// DEPLOYMENT private -> submit (review state lives on the
+									// deployment; admin approval to 'ready' gates @public).
 									if (!client) throw new Error('Not connected');
-									value = await client.appDeploy(appId, Number(callArgs?.[0]), String(callArgs?.[1] ?? ''));
+									value = await client.submitApp(appId, Number(callArgs?.[0]));
 									break;
 								}
-								case 'publish':
-									value = await publishApp(appId, String(callArgs?.[0] ?? ''));
+								case 'publish': {
+									// PUBLISH = bind a version to an audience (@me/@team/@public).
+									if (!client) throw new Error('Not connected');
+									value = await client.publishApp(appId, Number(callArgs?.[0]), String(callArgs?.[1] ?? ''));
 									break;
+								}
+								case 'developerStatus':
+									// The org's developer registration + Stripe status.
+									if (!client) throw new Error('Not connected');
+									value = await client.call('rrext_deploy_app', { subcommand: 'developer_status' });
+									break;
+								case 'registerDeveloper':
+									// Claim the org's developerId slug (org.admin, self-service).
+									if (!client) throw new Error('Not connected');
+									value = await client.call('rrext_deploy_app', { subcommand: 'developer_register', developerId: String(callArgs?.[0] ?? '') });
+									break;
+								case 'preflight': {
+									// Real, client-side store pre-flight over the app's manifest +
+									// built bundle (no server round-trip): the checks the STORE
+									// tab renders before the developer submits for review.
+									const apps = await scanWorkspaceApps();
+									const scanned = apps.find((a) => a.id === appId);
+									const checks: Array<{ id: string; state: 'pass' | 'warn' | 'fail'; label: string; note?: string }> = [];
+									if (!scanned) {
+										checks.push({ id: 'manifest', state: 'fail', label: 'App manifest', note: 'No package.json appManifest found for this app.' });
+										value = checks;
+										break;
+									}
+									checks.push(scanned.id.includes('.')
+										? { id: 'appid', state: 'pass', label: 'App id namespaced', note: scanned.id }
+										: { id: 'appid', state: 'fail', label: 'App id namespaced', note: `"${scanned.id}" must be <developerId>.<name>` });
+									checks.push(scanned.name
+										? { id: 'name', state: 'pass', label: 'Display name', note: scanned.name }
+										: { id: 'name', state: 'fail', label: 'Display name', note: 'appManifest.name is required.' });
+									checks.push(scanned.description
+										? { id: 'desc', state: 'pass', label: 'Description' }
+										: { id: 'desc', state: 'warn', label: 'Description', note: 'No description — recommended for the store listing.' });
+									checks.push(scanned.icon
+										? { id: 'icon', state: 'pass', label: 'Icon' }
+										: { id: 'icon', state: 'warn', label: 'Icon', note: 'No icon declared — the store shows a generic glyph.' });
+									let built = false;
+									try { await vscode.workspace.fs.stat(vscode.Uri.file(`${scanned.folder}/dist`)); built = true; } catch { built = false; }
+									checks.push(built
+										? { id: 'build', state: 'pass', label: 'Built bundle', note: 'dist/ present' }
+										: { id: 'build', state: 'fail', label: 'Built bundle', note: 'Build the app first — dist/ not found.' });
+									value = checks;
+									break;
+								}
 								default:
 									throw new Error(`Unknown appdev method: ${method}`);
 							}

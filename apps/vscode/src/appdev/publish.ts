@@ -4,24 +4,24 @@
 // =============================================================================
 
 /**
- * Publish flow — snapshot an immutable app version from VSCode.
+ * Deploy flow — copy an immutable app version to the server from VSCode.
  *
- * Publish ALWAYS uses the real rsbuild build (decision D5 — browser-linked
+ * Deploys ALWAYS use the real rsbuild build (decision D5 — browser-linked
  * dev output is never uploaded): a one-shot `rsbuild build` in the app
- * folder, then the built remoteEntry.js is pushed to the org registry via
- * the SDK's appPublish. Publishing never activates anything — the Deploy
- * view pins rungs.
- *
- * v1 transport bound: one binary frame = the remoteEntry.js (template-scale
- * apps). Multi-file bundles ride the zip upload when it lands (M5).
+ * folder, then ONE zip (dist/* at the zip root + package.json carrying the
+ * full appManifest) rides the generic `rrext_deploy add` rail door. The
+ * server retains the zip and unpacks it at receipt; deploying never
+ * activates anything — the Deploy view publishes rungs.
  */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
+import AdmZip from 'adm-zip';
 import { ConnectionManager } from '../connection/connection';
 import { scanWorkspaceApps } from './appScan';
+import { ensureAppMarker } from './appMarker';
 import { resolveRsbuildInvocation } from './watchManager';
 import { getLogger } from '../shared/util/output';
 
@@ -44,7 +44,7 @@ const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
  * @param message - Commit-style "what changed" note for the version card.
  * @returns The new version-rail entry.
  */
-export async function publishApp(appId: string, message: string): Promise<Record<string, unknown>> {
+export async function deployApp(appId: string, message: string): Promise<Record<string, unknown>> {
 	const logger = getLogger();
 	const apps = await scanWorkspaceApps();
 	const app = apps.find((a) => a.id === appId);
@@ -87,25 +87,32 @@ export async function publishApp(appId: string, message: string): Promise<Record
 		proc.on('error', (err) => finish(err));
 	});
 
-	// ── Read the built entry ─────────────────────────────────────────────
-	const bundlePath = path.join(app.folder, 'dist', 'remoteEntry.js');
-	const bundle = new Uint8Array(await fs.readFile(bundlePath));
+	// ── Pack the built bundle: dist/* at the zip root + package.json ─────
+	// The packed package.json carries the FULL appManifest — the server
+	// reads it as metadata.manifest, the listing truth for this version.
+	const distDir = path.join(app.folder, 'dist');
+	const zip = new AdmZip();
+	zip.addLocalFolder(distDir);
+	zip.addLocalFile(path.join(app.folder, 'package.json'));
+	const data = new Uint8Array(zip.toBuffer());
 
-	// ── Registry publish (never activates) ───────────────────────────────
-	const entry = await client.appPublish({
-		appId,
-		version: app.version || '0.0.0',
-		bundle,
-		message,
-		moduleId: app.moduleId,
-		name: app.name,
+	// ── Working-copy provenance: the client-side .rrapp projectId ────────
+	const marker = await ensureAppMarker(app.folder, appId);
+
+	// ── The ONE rail door (deploy = copy code to the server) ─────────────
+	const body = await client.deploy.add({
+		kind: 'app',
+		data,
+		metadata: { projectId: marker.projectId },
+		comment: message,
 	});
-	if (!entry) throw new Error(`Publish returned no version entry for ${appId}.`);
-	// The registry's answer is the truth about what was published — report
+	const entry = (body as Record<string, unknown>)?.artifact as Record<string, unknown> | undefined;
+	if (!entry) throw new Error(`Deploy returned no artifact entry for ${appId}.`);
+	// The registry's answer is the truth about what was deployed — report
 	// the SAME version in the log and the toast (the manifest's app.version
 	// is only the fallback).
-	const publishedVersion = entry.appVersion ?? app.version;
-	logger.output(`[appdev] published ${appId} v${publishedVersion} (registry v${entry.registryVersion})`);
-	vscode.window.showInformationMessage(`Published ${app.name} v${publishedVersion} — pin a rung from the Deploy view to make it live.`);
-	return entry as Record<string, unknown>;
+	const deployedVersion = (entry.appVersion as string) ?? app.version;
+	logger.output(`[appdev] deployed ${appId} v${deployedVersion} (registry v${entry.registryVersion})`);
+	vscode.window.showInformationMessage(`Deployed ${app.name} v${deployedVersion} — publish it from the Deploy view to make it live.`);
+	return entry;
 }

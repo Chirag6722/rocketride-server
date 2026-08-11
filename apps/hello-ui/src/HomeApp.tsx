@@ -673,12 +673,14 @@ const AppCard: React.FC<{ app: AppManifestEntry; onLaunch: (app: AppManifestEntr
 		try {
 			const client = ConnectionManager.getInstance().getClient();
 			if (!client) { setVersionRows([]); return; }
-			const pins = await client.appWhere(app.id);
-			// Dedupe by registry version — one row per version, all rungs listed
+			const pins = await client.whereApp(app.id);
+			// Dedupe by registry version — one row per version, all rungs listed.
+			// Non-serving rows carry their state so the label can say so
+			// (e.g. the org's own store submission shows "(in review)").
 			const byVersion = new Map<number, VersionRow>();
 			for (const pin of pins) {
 				const row = byVersion.get(pin.version) ?? { registryVersion: pin.version, appVersion: pin.appVersion, handles: [] };
-				row.handles.push(pin.handle);
+				row.handles.push(pin.state === 'submit' ? `${pin.handle} (in review)` : pin.handle);
 				byVersion.set(pin.version, row);
 			}
 			setVersionRows([...byVersion.values()].sort((a, b) => b.registryVersion - a.registryVersion));

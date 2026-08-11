@@ -328,7 +328,7 @@ export const StoreView: React.FC<IStoreViewProps> = ({ host, app }) => {
 					<div style={styles.h1}>{app.name}</div>
 					<div style={styles.sub}>
 						Store — the public listing, pre-flight checks, and platform review. Only needed to
-						distribute on the App Store; personal, team, and org deploys skip all of this.
+						distribute on the App Store; @me and @team deploys skip all of this.
 					</div>
 				</div>
 				<div style={styles.emptyWrap}>
@@ -350,7 +350,7 @@ export const StoreView: React.FC<IStoreViewProps> = ({ host, app }) => {
 				<div style={styles.h1}>{app.name}</div>
 				<div style={styles.sub}>
 					Store — the public listing, pre-flight checks, and platform review. Only needed to
-					distribute on the App Store; personal, team, and org deploys skip all of this. Every
+					distribute on the App Store; @me and @team deploys skip all of this. Every
 					public version is reviewed.
 				</div>
 			</div>

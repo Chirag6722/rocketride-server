@@ -44,11 +44,33 @@ import type { ScannedApp } from '../appdev/appScan';
 interface AppRowDTO {
 	id: string;
 	name: string;
-	status: 'local' | 'dev' | 'draft' | 'pending' | 'approved' | 'rejected' | 'live';
+	status: 'local' | 'dev' | 'draft' | 'pending' | 'rejected' | 'live';
 	folder?: string;
 	/** Host-resolved icon (a data: URI here — loadable under the webview CSP
 	 * regardless of localResourceRoots, which only cover the extension dir). */
 	iconUrl?: string;
+}
+
+/**
+ * Map a `list_mine` server status onto the sidebar's lifecycle vocabulary.
+ *
+ * The server reports the newest deployment's REVIEW state (the review
+ * lifecycle lives on the deployment): 'private' → 'draft' (deployed, not
+ * submitted), 'submit' → 'pending' (rendered "in review"), 'ready' → 'live'
+ * (approved), 'rejected' → 'rejected'. Anything unrecognised is a draft.
+ */
+function mapServerAppStatus(status: string | undefined): AppRowDTO['status'] {
+	switch (status) {
+		case 'submit':
+			return 'pending';
+		case 'ready':
+			return 'live';
+		case 'rejected':
+			return 'rejected';
+		case 'private':
+		default:
+			return 'draft';
+	}
 }
 
 // =============================================================================
@@ -281,9 +303,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		try {
 			const client = this.connectionManager.getClient();
 			if (client && this.connectionManager.isConnected() && isCloudConnected()) {
-				const res = (await client.call('rrext_app_catalog', { subcommand: 'list_mine' })) as { apps?: Array<{ id: string; name?: string; status?: string }> };
+				const res = (await client.call('rrext_app', { subcommand: 'list_mine' })) as { apps?: Array<{ id: string; name?: string; status?: string }> };
 				for (const server of res?.apps ?? []) {
-					const status = (server.status ?? 'draft') as AppRowDTO['status'];
+					const status = mapServerAppStatus(server.status);
 					const bound = rows.get(server.id);
 					if (bound) {
 						bound.status = status;

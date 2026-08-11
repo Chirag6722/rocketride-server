@@ -549,6 +549,8 @@ import type { IToolchainExport as Frozen_IToolchainExport } from '../contract/ve
 import type { IToolchainExport as Current_IToolchainExport } from './api';
 import type { IToolchainState as Frozen_IToolchainState } from '../contract/versions/v0';
 import type { IToolchainState as Current_IToolchainState } from './api';
+import type { AppVersionOverride as Frozen_AppVersionOverride } from '../contract/versions/v0';
+import type { AppVersionOverride as Current_AppVersionOverride } from './api';
 import type { EventTone as Frozen_EventTone } from '../contract/versions/v0';
 import type { EventTone as Current_EventTone } from './api';
 import type { EnvironmentScope as Frozen_EnvironmentScope } from '../contract/versions/v0';
@@ -1129,6 +1131,8 @@ const _t_IToolchainExport: Frozen_IToolchainExport = {} as Current_IToolchainExp
 void _t_IToolchainExport;
 const _t_IToolchainState: Frozen_IToolchainState = {} as Current_IToolchainState;
 void _t_IToolchainState;
+const _t_AppVersionOverride: Frozen_AppVersionOverride = {} as Current_AppVersionOverride;
+void _t_AppVersionOverride;
 const _t_EventTone: Frozen_EventTone = {} as Current_EventTone;
 void _t_EventTone;
 const _t_EnvironmentScope: Frozen_EnvironmentScope = {} as Current_EnvironmentScope;

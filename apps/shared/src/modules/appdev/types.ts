@@ -75,8 +75,9 @@ export interface AppSummary {
 // DEPLOY — versions + rungs
 // =============================================================================
 
-/** The four rungs of the publish ladder. */
-export type RungKind = 'personal' | 'team' | 'org' | 'public';
+/** The rungs of the publish ladder: @me (personal), @team, @public.
+ * (There is no org rung — "org-wide" is an org-admin-maintained team.) */
+export type RungKind = 'personal' | 'team' | 'public';
 
 /** One immutable published version, as rendered on the version rail. */
 export interface AppVersionInfo {
@@ -92,6 +93,10 @@ export interface AppVersionInfo {
 	message?: string;
 	/** Rungs this version is currently pinned to (chip row). */
 	rungs: RungKind[];
+	/** The deployment's per-version review state: private (draft, internally
+	 * publishable), submit (in review), ready (approved for the store),
+	 * rejected, or failed. */
+	state?: 'private' | 'submit' | 'ready' | 'rejected' | 'failed';
 }
 
 /** One row of the "Where this app is live" reverse index. */
@@ -285,14 +290,23 @@ export interface IAppBuilderHost {
 	setPref?: (key: string, value: unknown) => void;
 
 	// ── Deploy ───────────────────────────────────────────────────────────
-	/** List published immutable versions, newest first. */
+	/** List deployed immutable versions, newest first. */
 	listVersions?: () => Promise<AppVersionInfo[]>;
-	/** Publish (snapshot) the current build as an immutable version. */
-	publish?: (message: string) => Promise<void>;
-	/** Deploy: pin a rung to a version (update/promote/rollback included). */
-	deploy?: (version: string, target: string) => Promise<void>;
+	/** Deploy: snapshot the current build as the next immutable registry
+	 * version (DEPLOY = copy code to the server). Binds nothing — that is the
+	 * separate publish step. */
+	deploy?: (message: string) => Promise<void>;
+	/** Publish: bind a version to an audience (@me/@team/@public) — the one
+	 * verb for first publish, update, promote, and rollback. */
+	publish?: (version: string, target: string) => Promise<void>;
 	/** The reverse index for the Where-live panel. */
 	getWhereLive?: () => Promise<RungPin[]>;
+	/** The org's registered developer id ('' = not a developer yet). An app can
+	 * only deploy inside a claimed developer namespace (`<developerId>.<name>`). */
+	getDeveloperId?: () => Promise<string>;
+	/** Claim the org's developer id slug (org.admin, self-service — letters and
+	 * underscore only). Returns the assigned slug. */
+	registerDeveloper?: (developerId: string) => Promise<string>;
 
 	// ── Store ────────────────────────────────────────────────────────────
 	/** Load the current listing draft (null = no server record yet). */

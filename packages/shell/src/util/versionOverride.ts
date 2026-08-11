@@ -59,8 +59,8 @@ const SS_OVERRIDES_KEY = 'rr:appVersionOverrides';
  * entry URL. `url` is absent until minted.
  */
 export interface AppVersionOverride {
-	/** Registry version number, or a semver string pre-mint (deep links). */
-	version: number | string;
+	/** Registry version number — THE wire version identity (ints only). */
+	version: number;
 	/** The resolved artifact semver — for chip display. */
 	appVersion?: string;
 	/** Signed entry URL minted by rrext_app_deploy/entry. */

@@ -119,10 +119,10 @@ export interface DeployHistoryEntry {
 	actor?: DeployActor;
 }
 
-/** Body of `deploy.publish()`. */
+/** Body of `deploy.add()` — the generic rail door. */
 export interface PublishResult {
 	artifact?: DeployArtifact;
-	/** Present only when `deployTo` was given (one-step publish+deploy). */
+	/** Present only when `deployTo` was given (one-step add+deploy; pipes only). */
 	deployment?: Deployment;
 }
 

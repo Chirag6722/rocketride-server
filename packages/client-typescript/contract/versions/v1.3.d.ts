@@ -24,7 +24,7 @@
 // FROZEN rocketride SDK contract — floor v1.3 — never edit by hand
 // =============================================================================
 // Floor key:     1.3 (MAJOR.MINOR of packages/client-typescript/package.json)
-// Source commit: 2c198c3a464142e067635cb3d78d85ed67c951fa
+// Source commit: 04eddb914d2f6e59c8af5537444566b08809a0d4
 // Generator:     dts-bundle-generator@9.5.1
 // Produced by:   ./builder client-typescript:freeze
 //
@@ -1206,10 +1206,10 @@ export interface DeployHistoryEntry {
     version?: number;
     actor?: DeployActor;
 }
-/** Body of `deploy.publish()`. */
+/** Body of `deploy.add()` — the generic rail door. */
 export interface PublishResult {
     artifact?: DeployArtifact;
-    /** Present only when `deployTo` was given (one-step publish+deploy). */
+    /** Present only when `deployTo` was given (one-step add+deploy; pipes only). */
     deployment?: Deployment;
 }
 /** The standard list-API request arguments (page/search/filter/sort). */
@@ -3901,26 +3901,39 @@ declare class DeployApi {
     /** @param client - The parent RocketRideClient that owns this namespace. */
     constructor(client: RocketRideClient);
     /**
-     * Publishes a pipeline as the next immutable registry version.
+     * Deploys an object to the server as the next immutable registry version.
      *
-     * The artifact is sha256-locked: what was published is provably what
-     * runs. Publishing alone puts nothing live — point a team at the version
-     * with {@link deploy} (or pass `deployTo` to do both in one step, the
-     * small-team convenience).
+     * The ONE generic rail door for every kind — DEPLOY in the settled
+     * vocabulary means "copy code to the server"; binding it to an audience
+     * is the separate publish step ({@link deploy} for pipe teams; the app
+     * publish verbs for apps). The artifact is sha256-locked: what was
+     * deployed is provably what runs.
      *
-     * @param pipeline - The full pipeline definition to snapshot. `name` is
-     *   REQUIRED here (narrowed at compile time, enforced by the server):
-     *   artifacts are immutable and pipelineName renders on every deploy
-     *   surface — a nameless publish would show as a project GUID forever.
-     * @param options - Optional publish options.
+     * Kind dispatch:
+     * - `kind: 'pipe'` (default) — pass `pipeline` (the full definition;
+     *   `name` REQUIRED: it renders on every deploy surface forever).
+     * - `kind: 'app'` — pass `data` (ONE zip of the built bundle: dist/* at
+     *   the zip root + package.json carrying the appManifest). The server
+     *   retains the zip and unpacks it at receipt; the app deployment is born
+     *   state 'private' (internally publishable — an @me/@team binding may
+     *   serve it; the developer submits it for review to reach the public store).
+     *
+     * @param options.kind - 'pipe' (default) | 'app'.
+     * @param options.pipeline - The pipeline definition (kind 'pipe').
+     * @param options.data - The built-bundle zip bytes (kind 'app').
+     * @param options.metadata - Optional metadata blob (e.g. projectId provenance).
      * @param options.comment - "What changed" note kept in the registry.
      * @param options.deployTo - Team id to deploy the new version to
-     *   immediately (one-step publish+deploy).
+     *   immediately (one-step add+deploy; pipes only).
      * @returns The artifact entry, plus the deployment when `deployTo` was given.
      */
-    publish(pipeline: PipelineConfig & {
-        name: string;
-    }, options?: {
+    add(options: {
+        kind?: "pipe" | "app" | "node";
+        pipeline?: PipelineConfig & {
+            name: string;
+        };
+        data?: Uint8Array;
+        metadata?: Record<string, unknown>;
         comment?: string;
         deployTo?: string;
     }): Promise<PublishResult>;
@@ -4801,7 +4814,7 @@ export declare class RocketRideClient extends DAPClient {
         file: File;
         objinfo?: Record<string, unknown>;
         mimetype?: string;
-    }>, token: string): Promise<UPLOAD_RESULT[]>;
+    }>, token: string, maxConcurrent?: number): Promise<UPLOAD_RESULT[]>;
     /**
      * Ask a question to RocketRide's AI and get an intelligent response.
      */
@@ -5115,41 +5128,12 @@ export declare class RocketRideClient extends DAPClient {
         error?: string;
     }>>;
     /**
-     * Publish an immutable app version to the org registry.
-     *
-     * Publishing never activates anything — pin a rung with {@link appDeploy}
-     * to make the version live somewhere.
-     *
-     * @param options.appId - App id (appManifest.id, e.g. 'acme.brandy')
-     * @param options.version - Semver label (e.g. '0.5.0')
-     * @param options.bundle - The built remoteEntry.js bytes (single-file v1)
-     * @param options.message - Commit-style "what changed" note (version card)
-     * @param options.moduleId - MF container name (derived when omitted)
-     * @param options.name - Display name (defaults to appId)
-     * @returns The version-rail entry (registryVersion, appVersion, sha256, ...)
-     */
-    appPublish(options: {
-        appId: string;
-        version: string;
-        bundle: Uint8Array;
-        message?: string;
-        moduleId?: string;
-        name?: string;
-    }): Promise<{
-        registryVersion: number;
-        appVersion: string;
-        sha256: string;
-        publishedAt: number;
-        author: string;
-        message: string;
-    }>;
-    /**
-     * List an app's published versions, newest first (the version rail).
+     * List an app's deployed versions, newest first (the version rail).
      *
      * @param appId - App id
-     * @returns Rail entries; each carries `rungs` naming the rungs pinned to it
+     * @returns Rail entries; each carries `rungs` naming the audiences serving it
      */
-    appVersions(appId: string): Promise<Array<{
+    listDeployments(appId: string): Promise<Array<{
         registryVersion: number;
         appVersion: string;
         sha256: string;
@@ -5159,25 +5143,39 @@ export declare class RocketRideClient extends DAPClient {
         rungs: string[];
     }>>;
     /**
-     * Pin a rung to a published version — deploy, promote, and rollback are
-     * all this one verb ("repoint, never rebuild").
+     * Submit a deployed version for store review — flips the DEPLOYMENT's own
+     * state 'private' -> 'submit' (it enters the sys.admin review queue). The
+     * review state lives on the deployment, not a binding. Developer-org and
+     * developer-namespace gated.
      *
      * @param appId - App id
      * @param registryVersion - Registry version number from the rail
-     * @param target - '@user', '@team/<name-or-id>', or '@org'
-     * @returns The updated deployment record and the rung word
+     * @returns The refreshed rail entry ({registryVersion, state, ...})
      */
-    appDeploy(appId: string, registryVersion: number, target: string): Promise<{
-        deployment: Record<string, unknown>;
-        rung: string;
+    submitApp(appId: string, registryVersion: number): Promise<{
+        artifact: Record<string, unknown>;
     }>;
     /**
-     * The reverse index: which rungs run which version of an app.
+     * Bind a deployment to an audience — first publish, update, promote, and
+     * rollback are all this one verb ("repoint, never rebuild"). The binding
+     * is a pure pointer; '@public' requires the deployment be 'ready'
+     * (approved), '@user'/'@team' accept any non-'failed' deployment.
+     *
+     * @param appId - App id
+     * @param registryVersion - Registry version number from the rail
+     * @param target - '@user', '@team/<name-or-id>', or '@public'
+     * @returns The binding row ({audience, version, state, artifactState, ...})
+     */
+    publishApp(appId: string, registryVersion: number, target: string): Promise<{
+        publish: Record<string, unknown>;
+    }>;
+    /**
+     * The reverse index: which audiences serve which version of an app.
      *
      * @param appId - App id
      * @returns Pin rows ({rung, handle, version, appVersion, state, deployedAt})
      */
-    appWhere(appId: string): Promise<Array<{
+    whereApp(appId: string): Promise<Array<{
         rung: string;
         handle: string;
         version: number;
@@ -5185,6 +5183,22 @@ export declare class RocketRideClient extends DAPClient {
         state: string;
         deployedAt?: number;
     }>>;
+    /**
+     * Mint a signed bundle-entry URL for ONE specific deployed version —
+     * the desktop version selector's launch path. The server enforces
+     * entitlement at minting: a caller-visible publish row must serve the
+     * version (public counts only when live), or the caller deployed it.
+     *
+     * @param appId - App id
+     * @param version - Registry version number (ints ONLY — semver is display)
+     * @returns The signed entry URL plus the resolved version identity
+     */
+    appEntry(appId: string, version: number): Promise<{
+        url: string;
+        moduleId: string;
+        appVersion: string;
+        registryVersion: number;
+    }>;
     /** Read a file as a UTF-8 string. */
     fsReadString(path: string): Promise<string>;
     /** Write a UTF-8 string to a file. */
@@ -5378,13 +5392,13 @@ export declare class RocketRideClient extends DAPClient {
     /**
      * Lazily-initialised deploy API namespace (teams-as-environments).
      *
-     * Publish immutable pipeline versions to the org registry, point teams
-     * at them (promotion and rollback alike), schedule sources, and read
-     * the audit history.
+     * Deploy immutable versions of any kind onto the org registry (the one
+     * rail door), point teams at them (promotion and rollback alike),
+     * schedule sources, and read the audit history.
      *
      * @example
      * ```typescript
-     * const { artifact } = await client.deploy.publish(pipeline, { comment: 'v2' });
+     * const { artifact } = await client.deploy.add({ pipeline, comment: 'v2' });
      * await client.deploy.deploy('proj-1', artifact.version!, 'team-staging');
      * ```
      */

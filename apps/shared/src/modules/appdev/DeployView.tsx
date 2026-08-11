@@ -248,6 +248,67 @@ const styles: Record<string, React.CSSProperties> = {
 	emptyWrap: {
 		padding: '10px 26px 30px',
 	},
+	// "Publish to…" audience picker (Me / Team / Public), inline on a card.
+	picker: {
+		display: 'flex',
+		gap: 6,
+		flexWrap: 'wrap',
+	},
+	pickBtn: {
+		padding: '4px 10px',
+		fontSize: 11.5,
+		fontWeight: 600,
+		background: 'var(--rr-brand)',
+		color: 'var(--rr-text-on-brand, #ffffff)',
+		border: '1px solid transparent',
+		borderRadius: 4,
+		cursor: 'pointer',
+		whiteSpace: 'nowrap',
+	},
+	pickBtnGhost: {
+		padding: '4px 10px',
+		fontSize: 11.5,
+		fontWeight: 600,
+		background: 'transparent',
+		color: 'var(--rr-text-secondary)',
+		border: '1px solid var(--rr-border)',
+		borderRadius: 4,
+		cursor: 'pointer',
+	},
+	// "Register as a developer" banner — shown until the org holds a developerId.
+	devBanner: {
+		margin: '14px 26px 0',
+		padding: '12px 16px',
+		border: '1px solid var(--rr-color-warning)',
+		borderRadius: 8,
+		background: 'rgba(232,185,49,0.10)',
+	},
+	devBannerText: {
+		fontSize: 12.5,
+		color: 'var(--rr-text-primary)',
+		lineHeight: 1.5,
+	},
+	devBannerRow: {
+		display: 'flex',
+		gap: 8,
+		marginTop: 10,
+		alignItems: 'center',
+	},
+	devInput: {
+		flex: '0 1 260px',
+		background: 'var(--rr-bg-input)',
+		border: '1px solid var(--rr-border)',
+		borderRadius: 4,
+		padding: '5px 10px',
+		fontSize: 12.5,
+		color: 'var(--rr-text-primary)',
+		fontFamily: 'var(--rr-font-mono, Consolas, monospace)',
+	},
+	devError: {
+		marginTop: 8,
+		fontSize: 12,
+		color: 'var(--rr-color-error)',
+	},
 };
 
 // =============================================================================
@@ -256,10 +317,18 @@ const styles: Record<string, React.CSSProperties> = {
 
 /** Rung chip label per rung kind (the mockup's uppercase chips). */
 const RUNG_CHIP_LABEL: Record<RungKind, string> = {
-	personal: 'PERSONAL',
+	personal: 'ME',
 	team: 'TEAM',
-	org: 'ORG',
 	public: 'STORE',
+};
+
+/** Per-version review-state badge (the deployment's review lifecycle). */
+const STATE_BADGE: Record<NonNullable<AppVersionInfo['state']>, { variant: 'muted' | 'info' | 'success' | 'warning' | 'error'; label: string }> = {
+	private: { variant: 'muted', label: 'draft' },
+	submit: { variant: 'warning', label: 'in review' },
+	ready: { variant: 'success', label: 'ready' },
+	rejected: { variant: 'error', label: 'rejected' },
+	failed: { variant: 'error', label: 'failed' },
 };
 
 /** Renders a unix-seconds timestamp as a compact local date/time. */
@@ -287,6 +356,13 @@ export const DeployView: React.FC<IDeployViewProps> = ({ host, app }) => {
 	// ── Data — loaded through the host adapter ───────────────────────────
 	const [versions, setVersions] = useState<AppVersionInfo[] | null>(null);
 	const [pins, setPins] = useState<RungPin[] | null>(null);
+	// Which version's "Publish to…" audience picker is open (null = none).
+	const [pickerFor, setPickerFor] = useState<string | null>(null);
+	// Developer registration: '' = org not a developer yet; null = unknown/loading.
+	const [developerId, setDeveloperId] = useState<string | null>(null);
+	const [regSlug, setRegSlug] = useState('');
+	const [regBusy, setRegBusy] = useState(false);
+	const [regError, setRegError] = useState('');
 
 	/** Loads (or reloads) versions + pins; absent loaders resolve empty. */
 	const refresh = useCallback(async (): Promise<void> => {
@@ -306,27 +382,65 @@ export const DeployView: React.FC<IDeployViewProps> = ({ host, app }) => {
 
 	useEffect(() => { void refresh(); }, [refresh]);
 
-	/** Publish flow: message prompt is host-side later; v1 uses a simple prompt. */
-	const onPublish = useCallback(async (): Promise<void> => {
-		if (!host.publish) return;
-		// Commit-style message is part of the verb (the version card is the
-		// unit of UI) — collected inline until the publish dialog lands.
-		const message = window.prompt('Publish message (what changed):') ?? '';
-		if (!message) return;
-		await host.publish(message);
-		await refresh();
-	}, [host, refresh]);
+	// Load the org's developer id (null when the host can't report it — no banner).
+	useEffect(() => {
+		if (!host.getDeveloperId) { setDeveloperId(null); return; }
+		void host.getDeveloperId().then(setDeveloperId).catch(() => setDeveloperId(null));
+	}, [host]);
 
-	/** Deploy flow: target prompt until the "Deploy to…" picker lands. */
-	const onDeploy = useCallback(async (version: string): Promise<void> => {
+	/** Claim the org's developer id slug (org.admin, self-service). */
+	const onRegister = useCallback(async (): Promise<void> => {
+		if (!host.registerDeveloper || !regSlug.trim()) return;
+		setRegBusy(true);
+		setRegError('');
+		try {
+			const assigned = await host.registerDeveloper(regSlug.trim());
+			setDeveloperId(assigned);
+			setRegSlug('');
+		} catch (e) {
+			setRegError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setRegBusy(false);
+		}
+	}, [host, regSlug]);
+
+	/** Deploy: snapshot the current build as the next immutable registry
+	 * version ("Deploy" = copy code to the server). Binds nothing yet — that
+	 * is the separate publish step. (Rides the host's build action.) */
+	const onDeployBuild = useCallback(async (): Promise<void> => {
 		if (!host.deploy) return;
-		const target = window.prompt('Deploy target (@user, @team/<name>, @org):') ?? '';
-		if (!target) return;
-		await host.deploy(version, target);
+		const message = window.prompt('Deploy message (what changed):') ?? '';
+		if (!message) return;
+		await host.deploy(message);
 		await refresh();
 	}, [host, refresh]);
 
-	const deployWired = Boolean(host.listVersions || host.publish);
+	/** Publish: bind a version to an audience — @me, a team, or the public
+	 * store. The one verb for first publish, update, promote, and rollback.
+	 * @public needs the version approved (ready) first. */
+	const onPublishTo = useCallback(async (version: string, choice: 'me' | 'team' | 'public'): Promise<void> => {
+		if (!host.publish) return;
+		let target: string;
+		if (choice === 'me') target = '@me';
+		else if (choice === 'public') target = '@public';
+		else {
+			const name = window.prompt('Team name to publish to (@team/<name>):') ?? '';
+			if (!name.trim()) { setPickerFor(null); return; }
+			target = `@team/${name.trim()}`;
+		}
+		setPickerFor(null);
+		await host.publish(version, target);
+		await refresh();
+	}, [host, refresh]);
+
+	/** Submit a deployed version for public store review (private → submit). */
+	const onSubmit = useCallback(async (version: string): Promise<void> => {
+		if (!host.submitForReview) return;
+		await host.submitForReview(version);
+		await refresh();
+	}, [host, refresh]);
+
+	const deployWired = Boolean(host.listVersions || host.deploy);
 
 	return (
 		<div style={styles.wrap}>
@@ -334,8 +448,8 @@ export const DeployView: React.FC<IDeployViewProps> = ({ host, app }) => {
 			<div style={styles.head}>
 				<div style={styles.h1}>{app.name}</div>
 				<div style={styles.sub}>
-					Deploy — publish immutable versions and pin them to your rungs: personal, team, org, store.
-					No review needed off the store.
+					Deploy immutable versions, then publish each to an audience — @me, a team, or the public store.
+					Internal audiences serve instantly; the store gates every version on review.
 				</div>
 			</div>
 
@@ -348,17 +462,36 @@ export const DeployView: React.FC<IDeployViewProps> = ({ host, app }) => {
 				</div>
 			) : (
 				<>
+					{host.registerDeveloper && developerId === '' && (
+						<div style={styles.devBanner}>
+							<div style={styles.devBannerText}>
+								<strong>Register as a developer to deploy apps.</strong> Every app id is <code>&lt;developerId&gt;.&lt;name&gt;</code> — claim your organization&rsquo;s developer id (letters and underscores only) to publish under your own namespace.
+							</div>
+							<div style={styles.devBannerRow}>
+								<input
+									style={styles.devInput}
+									placeholder="developer id (e.g. acme_labs)"
+									value={regSlug}
+									onChange={(e) => setRegSlug(e.target.value)}
+								/>
+								<button style={styles.pickBtn} disabled={regBusy || !regSlug.trim()} onClick={() => void onRegister()}>
+									{regBusy ? 'Registering…' : 'Register'}
+								</button>
+							</div>
+							{regError ? <div style={styles.devError}>{regError}</div> : null}
+						</div>
+					)}
 					{/* Published versions rail */}
 					<div style={styles.sectLabel}>
 						Published versions
 						<span style={styles.sectMicro}>org registry · immutable · newest first</span>
 					</div>
 					<div style={styles.rail}>
-						{host.publish && (
-							<div style={styles.publishCard} onClick={() => void onPublish()}>
+						{host.deploy && (
+							<div style={styles.publishCard} onClick={() => void onDeployBuild()}>
 								<span style={styles.publishPlus}>+</span>
-								<span style={styles.publishTitle}>Publish</span>
-								<span style={styles.publishHint}>snapshot the current build</span>
+								<span style={styles.publishTitle}>Deploy</span>
+								<span style={styles.publishHint}>snapshot the current build to the server</span>
 							</div>
 						)}
 						{(versions ?? []).map((v) => (
@@ -370,15 +503,30 @@ export const DeployView: React.FC<IDeployViewProps> = ({ host, app }) => {
 								</div>
 								{v.message ? <div style={styles.cardMsg}>&ldquo;{v.message}&rdquo;</div> : null}
 								<div style={styles.chips}>
+									{v.state ? (
+										<StatusBadge variant={STATE_BADGE[v.state].variant}>{STATE_BADGE[v.state].label}</StatusBadge>
+									) : null}
 									{v.rungs.map((r) => (
 										<StatusBadge key={r} variant={r === 'public' ? 'info' : 'success'}>
 											{RUNG_CHIP_LABEL[r]}
 										</StatusBadge>
 									))}
 								</div>
-								{host.deploy && (
+								{(host.publish || host.submitForReview) && (
 									<div style={styles.cardAction}>
-										<button style={styles.miniBtn} onClick={() => void onDeploy(v.version)}>Deploy to…</button>
+										{host.submitForReview && (
+											<button style={styles.miniBtn} onClick={() => void onSubmit(v.version)}>Submit for review</button>
+										)}
+										{host.publish && (pickerFor === v.version ? (
+											<div style={styles.picker}>
+												<button style={styles.pickBtn} onClick={() => void onPublishTo(v.version, 'me')}>Me</button>
+												<button style={styles.pickBtn} onClick={() => void onPublishTo(v.version, 'team')}>Team…</button>
+												<button style={styles.pickBtn} onClick={() => void onPublishTo(v.version, 'public')}>Public</button>
+												<button style={styles.pickBtnGhost} onClick={() => setPickerFor(null)}>Cancel</button>
+											</div>
+										) : (
+											<button style={styles.miniBtn} onClick={() => setPickerFor(v.version)}>Publish to…</button>
+										))}
 									</div>
 								)}
 							</div>

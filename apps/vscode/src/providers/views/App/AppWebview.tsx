@@ -26,7 +26,7 @@ import '../../../themes/rocketride-vscode.css';
 import '../../styles/root.css';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { AppBuilderScreen } from 'shared/modules/appdev';
-import type { AppBuilderStage, AppErrorRow, AppEventRow, AppSummary, ConsoleRow, IAppBuilderHost, WatchStatus } from 'shared/modules/appdev';
+import type { AppBuilderStage, AppErrorRow, AppEventRow, AppSummary, AppVersionInfo, ConsoleRow, IAppBuilderHost, PreflightCheck, WatchStatus } from 'shared/modules/appdev';
 import { useMessaging } from '../hooks/useMessaging';
 
 // =============================================================================
@@ -62,12 +62,19 @@ type IncomingMessage =
 	| { type: 'appdev:result'; id: number; ok: boolean; value?: unknown; error?: string };
 
 // Wire shapes for the publish-ladder RPC (mirrors the SDK's return rows)
-interface WireRailEntry { registryVersion: number; appVersion: string; sha256: string; publishedAt: number; author: string; message: string; rungs?: string[] }
+interface WireRailEntry { registryVersion: number; appVersion: string; sha256: string; publishedAt: number; author: string; message: string; rungs?: string[]; state?: string }
 interface WirePin { rung: string; handle: string; version: number; appVersion: string; state: string; deployedAt?: number }
 
 // Bridge RPC bound — generous because publish builds are the slowest
 // legitimate call; a host that never answers must not pend forever.
 const RPC_TIMEOUT_MS = 5 * 60 * 1000;
+
+// Per-feed backlog cap. Feed rows can arrive before the consuming pane
+// subscribes (see the buffers below), so each feed retains its most recent
+// rows for replay. Bounded so a long-running dev session cannot grow it
+// without limit — a full pnpm install + rsbuild pass is a few hundred lines,
+// well inside this ceiling.
+const FEED_BACKLOG = 2000;
 
 // =============================================================================
 // STYLES
@@ -420,6 +427,42 @@ const AppWebview: React.FC = () => {
 	const errorListeners = useRef<Registry<AppErrorRow>>(new Set());
 	const watchListeners = useRef<Registry<WatchStatus>>(new Set());
 
+	// ── Feed backlogs — retained history for replay on late subscribe ───
+	// Rows can arrive before the consuming pane has subscribed: VSCode queues
+	// webview messages until view:ready, but the Console/Errors pane may still
+	// be unmounted (the Preview tab is active during dev-session startup, where
+	// pnpm/rsbuild output and failures are emitted). Without a backlog those
+	// rows reach the webview, find no listener, and are dropped — so opening
+	// the Console afterward shows nothing. Each feed retains a bounded backlog
+	// and replays it on subscribe, mirroring how the watch STATUS is retained
+	// (setWatchStatus) and replayed. The watch feed needs no backlog: its
+	// latest value already lives in component state.
+	const eventBuffer = useRef<AppEventRow[]>([]);
+	const consoleBuffer = useRef<ConsoleRow[]>([]);
+	const errorBuffer = useRef<AppErrorRow[]>([]);
+
+	// Push a row into a bounded backlog (oldest dropped past FEED_BACKLOG),
+	// then fan it out to the currently-subscribed listeners. Stable identities
+	// ([] deps) so message handlers can depend on them without churn.
+	const emitEvent = useCallback((row: AppEventRow) => {
+		const buf = eventBuffer.current;
+		buf.push(row);
+		if (buf.length > FEED_BACKLOG) buf.shift();
+		for (const fn of eventListeners.current) fn(row);
+	}, []);
+	const emitConsole = useCallback((row: ConsoleRow) => {
+		const buf = consoleBuffer.current;
+		buf.push(row);
+		if (buf.length > FEED_BACKLOG) buf.shift();
+		for (const fn of consoleListeners.current) fn(row);
+	}, []);
+	const emitError = useCallback((row: AppErrorRow) => {
+		const buf = errorBuffer.current;
+		buf.push(row);
+		if (buf.length > FEED_BACKLOG) buf.shift();
+		for (const fn of errorListeners.current) fn(row);
+	}, []);
+
 	// ── RPC lane (appdev:call/appdev:result correlation) ────────────────
 	const pendingCalls = useRef<Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>>(new Map());
 	const nextCallId = useRef(1);
@@ -440,13 +483,13 @@ const AppWebview: React.FC = () => {
 				if (msg.stage) setInitialStage(msg.stage);
 				break;
 			case 'appdev:event':
-				for (const fn of eventListeners.current) fn(msg.row);
+				emitEvent(msg.row);
 				break;
 			case 'appdev:console':
-				for (const fn of consoleListeners.current) fn(msg.row);
+				emitConsole(msg.row);
 				break;
 			case 'appdev:error':
-				for (const fn of errorListeners.current) fn(msg.row);
+				emitError(msg.row);
 				break;
 			case 'appdev:watch':
 				setWatchStatus(msg.status);
@@ -496,7 +539,7 @@ const AppWebview: React.FC = () => {
 				break;
 			}
 		}
-	}, []);
+	}, [emitEvent, emitConsole, emitError]);
 
 	const { sendMessage } = useMessaging<OutgoingMessage, IncomingMessage>({ onMessage });
 
@@ -523,15 +566,15 @@ const AppWebview: React.FC = () => {
 				sendMessage({ type: 'appdev:login' });
 			} else if (data?.type === 'shell:devConsole' && data.text !== undefined) {
 				const row: ConsoleRow = { time: stamp(), level: data.level ?? 'log', text: `[preview] ${data.text}` };
-				for (const fn of consoleListeners.current) fn(row);
+				emitConsole(row);
 			} else if (data?.type === 'shell:devError' && data.message) {
 				const row: AppErrorRow = { time: stamp(), message: data.message, source: data.source ?? 'preview' };
-				for (const fn of errorListeners.current) fn(row);
+				emitError(row);
 			}
 		};
 		window.addEventListener('message', onWindowMessage);
 		return () => window.removeEventListener('message', onWindowMessage);
-	}, [sendMessage, previewUrl]);
+	}, [sendMessage, previewUrl, emitConsole, emitError]);
 
 	/** One RPC round trip to the extension host over the bridge. */
 	const rpc = useCallback(<T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -554,10 +597,13 @@ const AppWebview: React.FC = () => {
 	// ── The BRIDGE adapter (IAppBuilderHost over useMessaging) ──────────
 	const host: IAppBuilderHost = useMemo(() => ({
 		capabilities,
-		// Feeds: registry-backed subscriptions (stable identities)
-		subscribeEvents: (fn) => { eventListeners.current.add(fn); return () => eventListeners.current.delete(fn); },
-		subscribeConsole: (fn) => { consoleListeners.current.add(fn); return () => consoleListeners.current.delete(fn); },
-		subscribeErrors: (fn) => { errorListeners.current.add(fn); return () => errorListeners.current.delete(fn); },
+		// Feeds: registry-backed subscriptions (stable identities). A new
+		// subscriber first receives the retained backlog (rows emitted before
+		// it mounted), then the live stream — so a late-opened Console/Errors
+		// pane shows the full history instead of starting blank.
+		subscribeEvents: (fn) => { for (const r of eventBuffer.current) fn(r); eventListeners.current.add(fn); return () => eventListeners.current.delete(fn); },
+		subscribeConsole: (fn) => { for (const r of consoleBuffer.current) fn(r); consoleListeners.current.add(fn); return () => consoleListeners.current.delete(fn); },
+		subscribeErrors: (fn) => { for (const r of errorBuffer.current) fn(r); errorListeners.current.add(fn); return () => errorListeners.current.delete(fn); },
 		subscribeWatch: (fn) => { watchListeners.current.add(fn); return () => watchListeners.current.delete(fn); },
 		// Preview chrome
 		getPreviewUrl: () => previewUrl,
@@ -590,28 +636,55 @@ const AppWebview: React.FC = () => {
 				publishedAt: v.publishedAt,
 				sha: v.sha256,
 				message: v.message,
-				rungs: (v.rungs ?? []).filter((r): r is 'personal' | 'team' | 'org' => r === 'personal' || r === 'team' || r === 'org'),
+				rungs: (v.rungs ?? []).filter((r): r is 'personal' | 'team' | 'public' => r === 'personal' || r === 'team' || r === 'public'),
+				state: (v.state || undefined) as AppVersionInfo['state'],
 			}));
 		},
-		publish: async (message) => { await rpc('publish', [message]); },
-		deploy: async (version, target) => {
+		deploy: async (message) => { await rpc('deploy', [message]); },
+		publish: async (version, target) => {
 			const registryVersion = registryByLabel.current.get(version);
 			if (registryVersion === undefined) throw new Error(`Unknown version: ${version}`);
-			await rpc('deploy', [registryVersion, target]);
+			await rpc('publish', [registryVersion, target]);
+		},
+		submitForReview: async (version) => {
+			const registryVersion = registryByLabel.current.get(version);
+			if (registryVersion === undefined) throw new Error(`Unknown version: ${version}`);
+			await rpc('submit', [registryVersion]);
 		},
 		getWhereLive: async () => {
 			const pins = await rpc<WirePin[]>('where');
-			return pins.map((p) => ({
-				rung: (p.rung === 'personal' || p.rung === 'team' || p.rung === 'org' ? p.rung : 'org') as 'personal' | 'team' | 'org',
-				label: p.rung.charAt(0).toUpperCase() + p.rung.slice(1),
-				handle: p.handle,
-				version: p.appVersion || `r${p.version}`,
-				state: (p.state === 'enabled' ? 'enabled' : 'pending') as 'enabled' | 'pending',
-				audience: p.rung === 'personal' ? 'on your desktop' : p.rung === 'org' ? 'everyone in the org' : 'team members',
-				deployedAt: p.deployedAt,
-			}));
+			return pins.map((p) => {
+				const rung = (p.rung === 'personal' || p.rung === 'team' || p.rung === 'public' ? p.rung : 'personal') as 'personal' | 'team' | 'public';
+				// p.state is the bound DEPLOYMENT's review state
+				// (private|submit|ready|rejected). Internal rungs serve live;
+				// the public rung shows the review gate — 'ready' = approved,
+				// anything else = still in review.
+				const state: 'enabled' | 'approved' | 'pending' =
+					rung !== 'public' ? 'enabled' : p.state === 'ready' ? 'approved' : 'pending';
+				return {
+					rung,
+					label: rung.charAt(0).toUpperCase() + rung.slice(1),
+					handle: p.handle,
+					version: p.appVersion || `r${p.version}`,
+					state,
+					audience: rung === 'personal' ? 'on your desktop' : rung === 'public' ? 'the app store' : 'team members',
+					deployedAt: p.deployedAt,
+				};
+			});
 		},
-		// Store loaders arrive in M5 — absent = teaching empty states
+		getDeveloperId: async () => {
+			const res = await rpc<{ developerId?: string | null }>('developerStatus');
+			return res?.developerId ?? '';
+		},
+		registerDeveloper: async (developerId) => {
+			const res = await rpc<{ developerId?: string }>('registerDeveloper', [developerId]);
+			return res?.developerId ?? developerId;
+		},
+		// Store: real client-side pre-flight over the manifest + built bundle.
+		// The listing + review-history loaders (loadListing/saveListing/
+		// loadReviewHistory) await the marketplace backend, so the StoreView
+		// shows honest empty states (and seeds the draft from the app facts).
+		runPreflight: async () => await rpc<PreflightCheck[]>('preflight'),
 	}), [capabilities, previewUrl, sendMessage, rpc]);
 
 	// ── Render ──────────────────────────────────────────────────────────

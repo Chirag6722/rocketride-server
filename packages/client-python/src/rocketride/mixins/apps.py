@@ -23,97 +23,85 @@
 """
 App publish ladder for RocketRide Client.
 
-Typed wrappers over the ``rrext_app_deploy`` DAP command: publish an
-immutable app version, list the version rail, pin a rung (deploy — one
-verb covers first publish, update, promote, and rollback), and read the
-reverse index (where). Mirrors the TypeScript client's appPublish /
-appVersions / appDeploy / appWhere.
+Typed wrappers over the ``rrext_deploy_app`` DAP command: list the version
+rail, publish a deployment to an audience (one verb covers update, promote,
+and rollback), read the reverse index (where), and mint a version's signed
+entry URL.
+Uploading is the generic rail door — see :meth:`DeployApi.add` (``client.deploy.add``).
+Mirrors the TypeScript client's listDeployments / publishApp / whereApp / appEntry.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
 from ..core import DAPClient
 
 
 class AppsMixin(DAPClient):
-    """Publish-ladder operations for RocketRide apps (rrext_app_deploy)."""
+    """App publish control for RocketRide apps (rrext_deploy_app)."""
 
-    async def app_publish(
-        self,
-        app_id: str,
-        version: str,
-        bundle: bytes,
-        message: str = '',
-        module_id: Optional[str] = None,
-        name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    async def list_deployments(self, app_id: str) -> List[Dict[str, Any]]:
         """
-        Publish an immutable app version to the org registry.
-
-        Publishing never activates anything — pin a rung with
-        :meth:`app_deploy` to make the version live somewhere.
-
-        Args:
-            app_id:    App id (appManifest.id, e.g. 'acme.brandy').
-            version:   Semver label for the version (e.g. '0.5.0').
-            bundle:    The built remoteEntry.js bytes (single-file v1).
-            message:   Commit-style "what changed" note for the version card.
-            module_id: MF container name (derived from app_id when omitted).
-            name:      Display name (defaults to app_id).
-
-        Returns:
-            The version-rail entry (registryVersion, appVersion, sha256,
-            publishedAt, author, message).
-        """
-        body = await self.call(
-            'rrext_app_deploy',
-            subcommand='publish',
-            appId=app_id,
-            version=version,
-            message=message,
-            moduleId=module_id,
-            name=name,
-            data=bundle,
-        )
-        return body.get('entry', {})
-
-    async def app_versions(self, app_id: str) -> List[Dict[str, Any]]:
-        """
-        List the app's published versions, newest first (the rail).
+        List the app's deployed versions, newest first (the rail).
 
         Args:
             app_id: App id.
 
         Returns:
-            Rail entries, each with a ``rungs`` list naming the rungs
-            currently pinned to that version.
+            Rail entries, each with a ``rungs`` list naming the audiences
+            currently serving that version.
         """
-        body = await self.call('rrext_app_deploy', subcommand='versions', appId=app_id)
+        body = await self.call('rrext_deploy_app', subcommand='versions', appId=app_id)
         return body.get('versions', [])
 
-    async def app_deploy(self, app_id: str, registry_version: int, target: str) -> Dict[str, Any]:
+    async def submit_app(self, app_id: str, registry_version: int) -> Dict[str, Any]:
         """
-        Pin a rung to a published version (deploy / promote / rollback).
+        Submit a deployed version for store review.
+
+        Flips the DEPLOYMENT's own state 'private' -> 'submit' (it enters the
+        sys.admin review queue). The review state lives on the deployment, not
+        a binding. Developer-org and developer-namespace gated.
 
         Args:
             app_id:           App id.
             registry_version: Registry version number from the rail.
-            target:           '@user', '@team/<name-or-id>', or '@org'.
 
         Returns:
-            Dict with the updated ``deployment`` record and the ``rung``.
+            Dict with the refreshed ``artifact`` rail entry.
         """
         return await self.call(
-            'rrext_app_deploy',
-            subcommand='deploy',
+            'rrext_deploy_app',
+            subcommand='submit',
+            appId=app_id,
+            version=registry_version,
+        )
+
+    async def publish_app(self, app_id: str, registry_version: int, target: str) -> Dict[str, Any]:
+        """
+        Bind a deployment to an audience (first publish / promote / rollback).
+
+        The binding is a pure pointer; '@public' requires the deployment be
+        'ready' (approved), '@user'/'@team' accept any non-'failed' deployment.
+
+        Args:
+            app_id:           App id.
+            registry_version: Registry version number from the rail.
+            target:           '@user', '@team/<name-or-id>', or '@public'.
+
+        Returns:
+            Dict with the ``publish`` binding row ({audience, version, state,
+            artifactState, snapshot}).
+        """
+        return await self.call(
+            'rrext_deploy_app',
+            subcommand='publish',
             appId=app_id,
             version=registry_version,
             target=target,
         )
 
-    async def app_where(self, app_id: str) -> List[Dict[str, Any]]:
+    async def where_app(self, app_id: str) -> List[Dict[str, Any]]:
         """
-        The reverse index: which rungs run which version of the app.
+        The reverse index: which audiences serve which version of the app.
 
         Args:
             app_id: App id.
@@ -121,25 +109,24 @@ class AppsMixin(DAPClient):
         Returns:
             Pin rows ({rung, handle, version, appVersion, state, deployedAt}).
         """
-        body = await self.call('rrext_app_deploy', subcommand='where', appId=app_id)
+        body = await self.call('rrext_deploy_app', subcommand='where', appId=app_id)
         return body.get('pins', [])
 
-    async def app_entry(self, app_id: str, version: Union[int, str]) -> Dict[str, Any]:
+    async def app_entry(self, app_id: str, version: int) -> Dict[str, Any]:
         """
-        Mint a signed bundle-entry URL for one specific published version.
+        Mint a signed bundle-entry URL for one specific deployed version.
 
         The desktop version selector's launch path. The server enforces
-        entitlement at minting: the version must be pinned on a rung the
-        caller belongs to, or the caller must be its publisher. Mirrors the
-        TypeScript client's ``appEntry``.
+        entitlement at minting: a caller-visible publish row must serve the
+        version (public counts only when live), or the caller deployed it.
+        Mirrors the TypeScript client's ``appEntry``.
 
         Args:
             app_id:  App id.
-            version: Registry version number, or a semver string
-                     ('1.3.0', 'v' prefix tolerated).
+            version: Registry version number (ints ONLY — semver is display).
 
         Returns:
             Dict with ``url``, ``moduleId``, ``appVersion``, and
             ``registryVersion``.
         """
-        return await self.call('rrext_app_deploy', subcommand='entry', appId=app_id, version=version)
+        return await self.call('rrext_deploy_app', subcommand='entry', appId=app_id, version=version)

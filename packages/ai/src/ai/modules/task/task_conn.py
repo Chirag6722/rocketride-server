@@ -75,6 +75,7 @@ from .commands.cmd_account import AccountCommands
 from .commands.cmd_app import AppCommands
 from .commands.cmd_public import PublicCommands
 from .commands.cmd_deploy import DeployCommands
+from .commands.cmd_pipe import DeployPipeCommands
 from .commands.cmd_log import LogCommands
 from .commands.cmd_store import StoreCommands
 from ai.account.models import AccountInfo, RequestContext, resolve_task_permissions, resolve_team_permissions
@@ -106,6 +107,7 @@ class TaskConn(
     AppCommands,
     PublicCommands,
     DeployCommands,
+    DeployPipeCommands,
     LogCommands,
     StoreCommands,
     DAPConn,
@@ -197,6 +199,7 @@ class TaskConn(
         AccountCommands.__init__(self, connection_id, server, transport, **kwargs)
         AppCommands.__init__(self, connection_id, server, transport, **kwargs)
         DeployCommands.__init__(self, connection_id, server, transport, **kwargs)
+        DeployPipeCommands.__init__(self, connection_id, server, transport, **kwargs)
         LogCommands.__init__(self, connection_id, server, transport, **kwargs)
         StoreCommands.__init__(self, connection_id, server, transport, **kwargs)
 

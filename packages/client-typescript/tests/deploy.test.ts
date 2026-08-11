@@ -66,7 +66,7 @@ function makePipeline(projectId: string) {
  * Integration tests for the deploy client API (teams-as-environments).
  *
  * These tests connect to a live server and exercise the published contract:
- * publish (immutable registry versions), deploy (pointing a team at a
+ * add (immutable registry versions), deploy (pointing a team at a
  * version — promotion and rollback alike), the standard list envelopes on
  * list/versions/history, pause/resume, soft remove with a surviving audit
  * trail, per-source schedules, and the single cron evaluator.
@@ -104,14 +104,14 @@ describe('Deploy API Integration Tests', () => {
 		'publish returns an immutable artifact and versions accumulate',
 		async () => {
 			const project = freshProject();
-			const result = await client.deploy.publish(makePipeline(project), { comment: 'first cut' });
+			const result = await client.deploy.add({ pipeline: makePipeline(project), comment: 'first cut' });
 			expect(result.artifact?.version).toBe(1);
 			expect(result.artifact?.sha256).toBeTruthy();
 			expect(result.artifact?.comment).toBe('first cut');
 			expect(result.artifact?.publishedBy?.userId).toBeTruthy();
 			expect(result.deployment).toBeUndefined();
 
-			const result2 = await client.deploy.publish(makePipeline(project));
+			const result2 = await client.deploy.add({ pipeline: makePipeline(project) });
 			expect(result2.artifact?.version).toBe(2);
 
 			const versions = await client.deploy.versions(project);
@@ -125,7 +125,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				const result = await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				const result = await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 				expect(result.deployment?.teamId).toBe(TEAM);
 				expect(result.deployment?.projectId).toBe(project);
 				expect(result.deployment?.version).toBe(1);
@@ -144,8 +144,8 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project));
-				await client.deploy.publish(makePipeline(project));
+				await client.deploy.add({ pipeline: makePipeline(project) });
+				await client.deploy.add({ pipeline: makePipeline(project) });
 
 				let dep = await client.deploy.deploy(project, 2, TEAM);
 				expect(dep.version).toBe(2);
@@ -169,7 +169,7 @@ describe('Deploy API Integration Tests', () => {
 		'deploying an unpublished version throws',
 		async () => {
 			const project = freshProject();
-			await client.deploy.publish(makePipeline(project));
+			await client.deploy.add({ pipeline: makePipeline(project) });
 			await expect(client.deploy.deploy(project, 7, TEAM)).rejects.toThrow();
 		},
 		TEST_CONFIG.timeout
@@ -180,7 +180,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 				const result = await client.deploy.run(project, 'webhook_1', TEAM);
 				expect(result.token).toBeTruthy();
 				// The UI's stop path: resolve the live task and terminate it.
@@ -206,7 +206,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 
 				const body = await client.deploy.list();
 				expect(Object.keys(body).sort()).toEqual(['page', 'pageSize', 'rows', 'total']);
@@ -227,7 +227,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 				const dep = await client.deploy.get(project, TEAM);
 				expect(dep.projectId).toBe(project);
 				expect(dep.sha256).toBeTruthy();
@@ -247,7 +247,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 				expect((await client.deploy.disable(project, TEAM)).state).toBe('disabled');
 				expect((await client.deploy.enable(project, TEAM)).state).toBe('enabled');
 			} finally {
@@ -261,7 +261,7 @@ describe('Deploy API Integration Tests', () => {
 		'remove is soft: hidden from list, history survives',
 		async () => {
 			const project = freshProject();
-			await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+			await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 			const dep = await client.deploy.remove(project, TEAM);
 			expect(dep.state).toBe('removed');
 
@@ -281,7 +281,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 
 				let dep = await client.deploy.setSchedule(project, 'webhook_1', '0 * * * *', TEAM);
 				expect(dep.schedules?.webhook_1?.cron).toBe('0 * * * *');
@@ -302,7 +302,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 				await client.deploy.setSchedule(project, 'webhook_1', '0 * * * *', TEAM, { ttl: 600 });
 
 				// Pause keeps cron/ttl; a cron edit must not unpause it.
@@ -330,7 +330,7 @@ describe('Deploy API Integration Tests', () => {
 		async () => {
 			const project = freshProject();
 			try {
-				await client.deploy.publish(makePipeline(project), { deployTo: TEAM });
+				await client.deploy.add({ pipeline: makePipeline(project), deployTo: TEAM });
 				await expect(client.deploy.setSchedule(project, 'webhook_1', 'not-a-cron', TEAM)).rejects.toThrow();
 			} finally {
 				await cleanup(project);

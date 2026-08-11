@@ -35,7 +35,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import ai.modules.task.commands.cmd_deploy as cmd_mod
+import ai.modules.task.commands.cmd_pipe as pipe_mod
 from ai.modules.task.commands.cmd_deploy import DeployCommands
+from ai.modules.task.commands.cmd_pipe import DeployPipeCommands
 from ai.account.models import resolve_team_permissions
 
 
@@ -63,10 +65,19 @@ def _account_info(*, teams=None, default_team='team-1', user_id='user-1'):
     )
 
 
+class _DeployConn(DeployCommands, DeployPipeCommands):
+    """Both deploy mixins on one connection, exactly as TaskConn composes them.
+
+    Tests drive the generic rail door (rrext_deploy add/reads) and pipe control
+    (rrext_deploy_pipe deploy/schedule/run/...) on a single connection.
+    """
+
+
 def _make_conn(account_info, scheduler=None):
-    """A DeployCommands instance with __init__ bypassed, real permission math."""
-    conn = DeployCommands.__new__(DeployCommands)
+    """A conn with both deploy mixins, __init__ bypassed, real permission math."""
+    conn = _DeployConn.__new__(_DeployConn)
     DeployCommands.__init__(conn, 1, MagicMock(), MagicMock())
+    DeployPipeCommands.__init__(conn, 1, MagicMock(), MagicMock())
     conn._account_info = account_info
     conn.build_response = MagicMock(side_effect=lambda req, body=None: {'type': 'response', 'body': body})
     conn.debug_message = MagicMock()
@@ -124,7 +135,10 @@ def account_stub(monkeypatch):
         ),
         audit=AsyncMock(),
     )
+    # Both command mixins import `account` independently — patch each module's
+    # binding so pipe handlers (cmd_pipe) hit the stub too.
     monkeypatch.setattr(cmd_mod, 'account', stub)
+    monkeypatch.setattr(pipe_mod, 'account', stub)
     return stub
 
 
@@ -140,7 +154,7 @@ class TestPublish:
     @pytest.mark.asyncio
     async def test_publish_calls_registry_with_org_and_actor(self, account_stub):
         conn = _make_conn(_account_info())
-        resp = await conn._deploy_publish({}, {'pipeline': PIPE, 'comment': 'note'})
+        resp = await conn._deploy_add_pipe({}, {'pipeline': PIPE, 'comment': 'note'})
 
         args = account_stub.deployments_publish.await_args.args
         assert args[0] == 'org-1' and args[1] == 'proj-1'
@@ -153,13 +167,13 @@ class TestPublish:
     async def test_publish_denied_without_control_anywhere(self, account_stub):
         conn = _make_conn(_account_info(teams=[{'id': 'team-1', 'name': 'D', 'permissions': ['task.monitor']}]))
         with pytest.raises(PermissionError):
-            await conn._deploy_publish({}, {'pipeline': PIPE})
+            await conn._deploy_add_pipe({}, {'pipeline': PIPE})
         account_stub.deployments_publish.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_publish_and_deploy_in_one_step(self, account_stub):
         conn = _make_conn(_account_info())
-        resp = await conn._deploy_publish({}, {'pipeline': PIPE, 'deployTo': 'team-1'})
+        resp = await conn._deploy_add_pipe({}, {'pipeline': PIPE, 'deployTo': 'team-1'})
         account_stub.deployments_deploy.assert_awaited_once()
         assert resp['body']['deployment']['teamId'] == 'team-1'
         conn._test_scheduler.sync.assert_called_once()
@@ -168,7 +182,7 @@ class TestPublish:
     async def test_publish_deploy_to_foreign_team_denied(self, account_stub):
         conn = _make_conn(_account_info())
         with pytest.raises(PermissionError):
-            await conn._deploy_publish({}, {'pipeline': PIPE, 'deployTo': 'team-foreign'})
+            await conn._deploy_add_pipe({}, {'pipeline': PIPE, 'deployTo': 'team-foreign'})
         account_stub.deployments_deploy.assert_not_awaited()
 
 
@@ -262,7 +276,7 @@ class TestReads:
         # nameless publish would show as a GUID forever.
         conn = _make_conn(_account_info())
         with pytest.raises(ValueError, match='pipeline.name'):
-            await conn._deploy_publish({}, {'pipeline': {'project_id': 'proj-1', 'components': []}})
+            await conn._deploy_add_pipe({}, {'pipeline': {'project_id': 'proj-1', 'components': []}})
         account_stub.deployments_publish.assert_not_awaited()
 
     @pytest.mark.asyncio

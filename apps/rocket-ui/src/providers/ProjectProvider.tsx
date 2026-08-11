@@ -764,7 +764,8 @@ const ProjectProvider: React.FC<ProjectPageProps> = ({ uri, pipeline, isDirty, i
 			// The spread builds publish()'s required-name shape statically —
 			// a truthiness check alone would not narrow the property type.
 			const snapshot = { ...pipeline, name: pipeline.name || documentName };
-			await client.deploy.publish(snapshot, {
+			await client.deploy.add({
+				pipeline: snapshot,
 				...(comment ? { comment } : {}),
 				...(deployTo ? { deployTo } : {}),
 			});
