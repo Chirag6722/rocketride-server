@@ -285,3 +285,9 @@ def test_sanitize_value_json_encodes_nested_with_fallback():
 
     result = DatabaseInstanceBase._sanitize_value({'t': datetime.date(2026, 1, 1)})
     assert '"2026-01-01"' in result
+
+
+def test_sanitize_value_json_encodes_tuples():
+    """Tuple values (psycopg2 composite types) must be JSON-encoded."""
+    result = DatabaseInstanceBase._sanitize_value((1, 'x'))
+    assert result == '[1, "x"]'
