@@ -218,3 +218,34 @@ class TestRequest:
         with mock.patch.object(gc, '_urlopen', side_effect=err):
             with pytest.raises(gc.GraphError, match='Excel.*denied'):
                 gc.request(SVC, self._auth(), 'GET', '/me')
+
+    def test_extra_headers_merge_into_request(self):
+        # extra_headers (e.g. If-Match for docx round-trip) ride on the
+        # outgoing request alongside the default headers. urllib normalizes
+        # header names to Title-Case, so 'If-Match' is read back as 'If-match'.
+        with mock.patch.object(gc, '_urlopen', return_value=_resp({'ok': 1})) as u:
+            out = gc.request(
+                SVC, self._auth(), 'PUT', '/me/drive/items/1/content', data=b'x', extra_headers={'If-Match': 'abc123'}
+            )
+            assert out == {'ok': 1}
+            req = u.call_args[0][0]
+            assert req.get_header('If-match') == 'abc123'
+            assert req.get_header('Authorization') == 'Bearer TOK'
+
+    def test_412_precondition_failed_raises_conflict_graph_error(self):
+        import io
+
+        body = io.BytesIO(json.dumps({'error': {'code': 'resourceModified', 'message': 'stale etag'}}).encode())
+        err = urllib.error.HTTPError('u', 412, 'precondition failed', {}, body)
+        with mock.patch.object(gc, '_urlopen', side_effect=err):
+            with pytest.raises(gc.GraphError, match='conflict'):
+                gc.request(SVC, self._auth(), 'PUT', '/me/drive/items/1/content', data=b'x')
+
+    def test_409_conflict_raises_conflict_graph_error(self):
+        import io
+
+        body = io.BytesIO(json.dumps({'error': {'code': 'nameAlreadyExists', 'message': 'conflict'}}).encode())
+        err = urllib.error.HTTPError('u', 409, 'conflict', {}, body)
+        with mock.patch.object(gc, '_urlopen', side_effect=err):
+            with pytest.raises(gc.GraphError, match='conflict'):
+                gc.request(SVC, self._auth(), 'PUT', '/me/drive/items/1/content', data=b'x')

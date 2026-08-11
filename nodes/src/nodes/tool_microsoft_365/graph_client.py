@@ -419,15 +419,21 @@ def request(
     data: bytes | None = None,
     content_type: str | None = None,
     binary: bool = False,
+    extra_headers: dict | None = None,
 ) -> Any:
     """Run a Graph API request with exponential backoff on 429/5xx.
 
     ``binary=True`` returns the raw response bytes (download content);
     otherwise the JSON dict (or {} when the body is empty/whitespace). With 4
     attempts the sleeps are 1s, 2s, 4s (or a numeric Retry-After header when
-    present) — worst case ~7s before the final raise. 401/403 fail fast with
-    an agent-readable message naming the consent fix; other HTTP errors fail
-    fast with the status and Graph error detail.
+    present) — worst case ~7s before the final raise. ``extra_headers`` are
+    merged in after the defaults (e.g. an ``If-Match`` etag on a docx
+    round-trip write), so a caller-supplied value can override
+    Authorization/Content-Type when it needs to. 401/403 fail fast with an
+    agent-readable message naming the consent fix; 409/412 (a stale
+    If-Match) fail fast with a conflict message telling the caller to
+    re-read and retry; other HTTP errors fail fast with the status and
+    Graph error detail.
     """
     url = path if path.startswith('http') else GRAPH_BASE + path
     if params:
@@ -439,6 +445,8 @@ def request(
         headers['Content-Type'] = content_type or (
             'application/json' if json_body is not None else 'application/octet-stream'
         )
+        if extra_headers:
+            headers.update(extra_headers)
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             with _urlopen(req, timeout=60) as resp:
@@ -463,6 +471,11 @@ def request(
                     f'{svc.product}: access denied ({detail}). Check that the granted scopes/'
                     'application permissions cover this operation and that admin consent was granted '
                     '(AADSTS65001 means consent is required). Reconnect your Microsoft account or fix the Entra app.'
+                ) from exc
+            if status in (409, 412):
+                raise GraphError(
+                    f'{svc.product}: conflict (HTTP {status}; {detail}) — the file changed while editing; '
+                    're-read and retry.'
                 ) from exc
             raise GraphError(f'{svc.product}: Graph request failed (HTTP {status}; {detail}).') from exc
     raise RuntimeError('request: retry loop exhausted unexpectedly')  # unreachable
