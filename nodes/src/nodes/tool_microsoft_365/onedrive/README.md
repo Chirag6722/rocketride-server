@@ -27,7 +27,7 @@ treated as a path; anything else is treated as an item id.
 | `microsoft.userPrincipalName` | Acting user's UPN for `service` auth (app-only calls target `/users/{upn}`). |
 | `microsoft.oAuthButton` / `microsoft.userToken` | User OAuth: sign in to populate the access token. |
 | `onedrive.access` | `readonly` or `write` (default). Resolved by the shared `ONEDRIVE` spec in `core/microsoft_access.py`; scopes are never hand-entered. |
-| `onedrive.allowPublicSharing` | Off by default. Gates anonymous sharing links and org-wide alias invites. |
+| `onedrive.allowPublicSharing` | Off by default. Gates anonymous sharing links and invites to non-individual recipients. |
 | `onedrive.allowHardDelete` | Off by default. Gates `onedrive_permanently_delete`; trash/restore are always available. |
 
 ### Access tiers → scopes
@@ -40,9 +40,11 @@ treated as a path; anything else is treated as an item id.
 ### Gate flags
 
 - **`allowPublicSharing`**: off by default. When off, `onedrive_create_sharing_link`
-  refuses `scope="anonymous"` links, and `onedrive_invite` refuses invites to
-  emails whose local-part reads as a distribution/org-wide alias (e.g.
-  `all@contoso.com`). Grants to individually named people are never gated.
+  refuses `scope="anonymous"` links, and `onedrive_invite` looks up every
+  recipient in the directory (`GET /users/{email}`) and refuses the whole
+  invite if any recipient fails to resolve to an individual directory user —
+  distribution lists and unresolvable addresses included. Fails closed: a
+  lookup permission error is treated the same as a non-user address.
 - **`allowHardDelete`**: off by default. When off, `onedrive_permanently_delete`
   is refused; `onedrive_trash` / `onedrive_restore` are always available as
   the recoverable alternative.
@@ -59,8 +61,8 @@ treated as a path; anything else is treated as an item id.
   `onedrive_permanently_delete` (gated by `allowHardDelete`).
 - **Sharing (write):** `onedrive_create_sharing_link` (gated by
   `allowPublicSharing` for anonymous links), `onedrive_list_permissions`
-  (read-only), `onedrive_invite` (gated by `allowPublicSharing` for org-wide
-  aliases), `onedrive_delete_permission`.
+  (read-only), `onedrive_invite` (gated by `allowPublicSharing`; recipients
+  must resolve to individual directory users otherwise), `onedrive_delete_permission`.
 - **Diagnostics:** `onedrive_check_connection` verifies that granted OAuth
   scopes cover the configured access tier.
 
@@ -107,9 +109,10 @@ onedrive_invite  { "item": "Reports/q3.pdf", "emails": ["alex@contoso.com"],
   grant/consent the Entra app permission (service auth) at the required tier.
 - **`access` is read-only:** write tools raise `MicrosoftAccessError`; raise
   `onedrive.access` to `write`.
-- **Sharing/invite refused:** anonymous links and org-wide alias invites need
-  `onedrive.allowPublicSharing` enabled; permanent delete needs
-  `onedrive.allowHardDelete` enabled.
+- **Sharing/invite refused:** anonymous links, and invites to any recipient
+  that doesn't resolve to an individual directory user (including a lookup
+  permission error), need `onedrive.allowPublicSharing` enabled; permanent
+  delete needs `onedrive.allowHardDelete` enabled.
 - **Item not found:** confirm whether the caller meant a path or an item id —
   a value without `/` is always treated as an item id, never a bare
   root-level filename.

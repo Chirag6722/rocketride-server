@@ -30,7 +30,7 @@ treated as a path, anything else as an item id.
 | `onedrive_permanently_delete` | `POST .../permanentDelete` | Permanently delete an item (gated). |
 | `onedrive_create_sharing_link` | `POST .../createLink` | Create a view/edit sharing link (anonymous scope gated). |
 | `onedrive_list_permissions` | `GET .../permissions` | List sharing permissions on an item. |
-| `onedrive_invite` | `POST .../invite` | Invite people by email (org-wide aliases gated). |
+| `onedrive_invite` | `POST .../invite` | Invite people by email (non-individual recipients gated via directory lookup). |
 | `onedrive_delete_permission` | `DELETE .../permissions/{id}` | Revoke a sharing permission. |
 | `onedrive_check_connection` | `GET /drive` + scope report | Diagnostics — connection and scope coverage. |
 
@@ -59,7 +59,7 @@ The agent discovers the `onedrive_*` tools and calls them per its instructions.
 | `microsoft.userPrincipalName` | for `service` | Acting user's UPN — app-only calls target `/users/{upn}`. |
 | `microsoft.userToken` | for `user` | Populated by the sign-in button; broker-refreshed. |
 | `onedrive.access` | no | `readonly` or `write` (default). Resolved by the shared `ONEDRIVE` access spec — scopes are never hand-entered. |
-| `onedrive.allowPublicSharing` | no | Off by default; gates anonymous sharing links and org-wide alias invites. |
+| `onedrive.allowPublicSharing` | no | Off by default; gates anonymous sharing links and invites to non-individual recipients. |
 | `onedrive.allowHardDelete` | no | Off by default; gates `onedrive_permanently_delete`. |
 
 ## Where to get your credentials

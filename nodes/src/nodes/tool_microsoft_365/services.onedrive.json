@@ -9,7 +9,7 @@
 	"prefix": "onedrive",
 	"icon": "onedrive.svg",
 	"documentation": "https://docs.rocketride.org",
-	"description": ["Exposes Microsoft OneDrive operations as agent tools.", "List and search files and folders, read metadata, download and upload content, create folders, copy/move/rename items, trash and restore, and manage sharing (links and permission grants) on the acting user's OneDrive via the Microsoft Graph drive API.", "Anonymous sharing links and org-wide invites, and permanent delete, are gated behind explicit config flags. Authenticates via an Entra app (client credentials) or user OAuth."],
+	"description": ["Exposes Microsoft OneDrive operations as agent tools.", "List and search files and folders, read metadata, download and upload content, create folders, copy/move/rename items, trash and restore, and manage sharing (links and permission grants) on the acting user's OneDrive via the Microsoft Graph drive API.", "Anonymous sharing links, invites to non-individual recipients, and permanent delete, are gated behind explicit config flags. Authenticates via an Entra app (client credentials) or user OAuth."],
 	"tile": ["OneDrive (${parameters.onedrive.access})"],
 	"lanes": {},
 	"preconfig": {
@@ -41,7 +41,7 @@
 		"onedrive.allowPublicSharing": {
 			"type": "boolean",
 			"title": "Allow public / org-wide sharing",
-			"description": "Off by default. When off, create_sharing_link refuses 'anonymous' links and invite refuses org-wide grants. Grants to individual users are not gated.",
+			"description": "Off by default. When off, create_sharing_link refuses 'anonymous' links and invite only accepts recipients that resolve to individual directory users (distribution lists and unresolvable addresses are refused). Turn on to allow public links and unrestricted invites.",
 			"default": false
 		},
 		"onedrive.allowHardDelete": {

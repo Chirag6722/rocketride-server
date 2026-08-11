@@ -29,8 +29,9 @@ OneDrive tool node instance.
 Exposes the Microsoft Graph drive API as agent tools: list and search items,
 read metadata, download and upload content, create folders, copy/move/rename,
 trash/restore, and manage sharing (links and permission grants). Write
-operations require the ``write`` tier; anonymous sharing links and org-wide
-invites additionally require the ``allowPublicSharing`` gate, and permanent
+operations require the ``write`` tier; anonymous sharing links require the
+``allowPublicSharing`` gate, invites require every recipient to resolve to an
+individual directory user unless ``allowPublicSharing`` is on, and permanent
 delete requires the ``allowHardDelete`` gate.
 
 Operational targets (item path/id, folder, permission id) are always
@@ -56,7 +57,6 @@ from .client import (
     _seg,
     clean_item,
     clean_permission,
-    is_org_wide_alias,
     it,
     parent_ref,
     request,
@@ -96,6 +96,31 @@ class IInstance(MicrosoftToolInstanceBase):
             end = min(start + CHUNK_SIZE, total) - 1
             result = upload_chunk(self.IGlobal.auth, upload_url, content[start : end + 1], start, end, total)
         return result
+
+    def _require_individual_directory_user(self, email: str) -> None:
+        """Fail closed unless ``email`` resolves to an individual directory user.
+
+        Looked up via ``GET /users/{email}?$select=id,userType`` — a directory
+        lookup under GRAPH_BASE, not the acting user's drive. Any failure
+        (404 = not a user, e.g. a distribution list; 403 = missing lookup
+        permission; anything else) refuses the invite rather than guessing.
+        """
+        try:
+            request(self.IGlobal.auth, 'GET', f'/users/{_seg(email)}', params={'$select': 'id,userType'})
+        except Exception as exc:
+            is_permission_error = isinstance(exc, graph_client.GraphError) and 'access denied' in str(exc)
+            hint = (
+                'grant a directory-read scope (User.ReadBasic.All delegated / User.Read.All application) '
+                'to look up recipients'
+                if is_permission_error
+                else 'enable onedrive.allowPublicSharing to allow unrestricted invites'
+            )
+            raise graph_client.GraphError(
+                f"onedrive_invite: recipient '{email}' does not resolve to an individual directory user "
+                f'({exc}). With allowPublicSharing off, invites are only allowed to addresses that resolve '
+                f'to individual directory users (distribution lists and unresolvable addresses are '
+                f'refused); {hint}.'
+            ) from exc
 
     # =======================================================================
     # DIAGNOSTICS
@@ -477,22 +502,26 @@ class IInstance(MicrosoftToolInstanceBase):
             },
         },
         description=(
-            'Grant access to a file or folder by inviting specific people by email. An email whose local-part '
-            "reads as a distribution/org-wide alias (e.g. 'all@contoso.com') additionally requires the "
-            "node's allowPublicSharing flag, since it fans out to everyone in the tenant rather than one "
-            'named individual. Requires the write tier.'
+            "Grant access to a file or folder by inviting specific people by email. When the node's "
+            'allowPublicSharing flag is off (the default), every recipient is looked up in the directory '
+            'and must resolve to an individual user — distribution lists and unresolvable addresses are '
+            'refused, and the whole invite is refused if any one recipient fails the check. Turn on '
+            'allowPublicSharing to skip the lookup and invite any address. Requires the write tier.'
         ),
     )
     def onedrive_invite(self, args: dict) -> dict:
-        """Invite people by email to access an item. Org-wide aliases require write + allowPublicSharing."""
+        """Invite people by email to access an item. With allowPublicSharing off, every recipient must
+        resolve to an individual directory user. Requires the write tier.
+        """
         args = normalize_tool_input(args, tool_name='tool_onedrive')
         self.IGlobal.access.require_write('onedrive_invite')
         item = require_str(args, 'item', tool_name='onedrive_invite')
         emails = require_str_list(args, 'emails', tool_name='onedrive_invite')
         role = self._enum_arg(args, 'role', ('read', 'write'), 'read')
         message = optional_str(args, 'message', default='', tool_name='onedrive_invite') or ''
-        if any(is_org_wide_alias(e) for e in emails):
-            self.IGlobal.access.require_flag('allowPublicSharing', 'onedrive_invite (org-wide alias)')
+        if not self.IGlobal.access.flags.get('allowPublicSharing', False):
+            for email in emails:
+                self._require_individual_directory_user(email)
         data = request(
             self.IGlobal.auth,
             'POST',
@@ -501,7 +530,7 @@ class IInstance(MicrosoftToolInstanceBase):
                 'recipients': [{'email': e} for e in emails],
                 'message': message,
                 'requireSignIn': True,
-                'sendInvitation': bool(message),
+                'sendInvitation': True,
                 'roles': [role],
             },
         )

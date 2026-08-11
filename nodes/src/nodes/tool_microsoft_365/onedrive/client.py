@@ -49,12 +49,6 @@ CHUNK_SIZE = 5 * 1024 * 1024
 # Above this, onedrive_download returns a downloadUrl instead of inlining bytes.
 DOWNLOAD_INLINE_LIMIT = 1024 * 1024
 
-# Local-parts that read as a distribution/org-wide alias rather than a named
-# individual (e.g. 'all@contoso.com'). onedrive_invite gates any of these
-# behind allowPublicSharing, the same spirit as Drive's domain-wide sharing
-# gate: these addresses fan out to everyone in the tenant, not one person.
-ORG_WIDE_ALIAS_LOCALPARTS = frozenset({'all', 'everyone', 'staff', 'company', 'org', 'orgwide', 'team'})
-
 
 def _seg(value: str) -> str:
     """URL-encode a single path segment (item/permission ids may contain '!' etc.)."""
@@ -78,12 +72,6 @@ def parent_ref(target_folder: str) -> dict:
     if '/' in target_folder:
         return {'path': f'/drive/root:/{target_folder}'}
     return {'id': target_folder}
-
-
-def is_org_wide_alias(email: str) -> bool:
-    """True when an email's local-part reads as a distribution/org-wide alias."""
-    local = email.split('@', 1)[0].strip().lower()
-    return local in ORG_WIDE_ALIAS_LOCALPARTS
 
 
 def upload_chunk(auth, session_url: str, chunk: bytes, start: int, end: int, total: int) -> dict:
