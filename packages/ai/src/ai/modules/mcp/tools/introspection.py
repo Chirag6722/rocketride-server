@@ -9,12 +9,19 @@ SDK method; it is synthesized client-side via a static parse of the pipeline
 plus a best-effort `get_service` lookup per component provider.
 """
 
+import time
 from typing import Any, Dict
 
 from ..errors import _bad
 from ..tooling import ToolRegistry
 from ._common import engine_call
 from ._common import load_pipeline_async
+
+# One overall budget for describe_pipeline's per-provider lookups: without it a
+# client-supplied pipeline with many distinct providers against a wedged engine
+# holds the tool call open for providers x per-call timeout. Providers left
+# unresolved when the budget elapses fall back to the pipeline's own metadata.
+DESCRIBE_LOOKUP_BUDGET_SECONDS = 30
 
 _PIPELINE_OR_FILEPATH_SCHEMA = {
     'type': 'object',
@@ -75,6 +82,7 @@ async def _describe_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
 
     service_cache: Dict[str, Any] = {}
     components = []
+    lookup_deadline = time.monotonic() + DESCRIBE_LOOKUP_BUDGET_SECONDS
     for comp in pipeline.get('components', []) or []:
         # Client-supplied pipeline: a non-mapping entry must not abort the
         # whole parse (same guard as _list_components).
@@ -84,11 +92,14 @@ async def _describe_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
         service = None
         if provider is not None:
             if provider not in service_cache:
-                try:
-                    resolved, _timeout_err = await engine_call(client.get_service(provider), 'describe_pipeline')
-                    service_cache[provider] = resolved  # a timed-out lookup caches as None
-                except Exception:  # noqa: BLE001 - unknown/broken provider must not abort the parse
-                    service_cache[provider] = None
+                if time.monotonic() >= lookup_deadline:
+                    service_cache[provider] = None  # budget spent; static parse continues
+                else:
+                    try:
+                        resolved, _timeout_err = await engine_call(client.get_service(provider), 'describe_pipeline')
+                        service_cache[provider] = resolved  # a timed-out lookup caches as None
+                    except Exception:  # noqa: BLE001 - unknown/broken provider must not abort the parse
+                        service_cache[provider] = None
             service = service_cache[provider]
 
         components.append(

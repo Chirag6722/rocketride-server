@@ -42,7 +42,7 @@ async def test_log_chapters_happy_path(fake_engine):
     assert result['chapters'][0]['outcome'] == 'completed'
     call = fake_engine.log_calls[0]
     assert call['method'] == 'chapters'
-    assert (call['project_id'], call['source'], call['run_kind']) == ('p1', 's1', 'dev')
+    assert (call['project_id'], call['source'], call['team_id']) == ('p1', 's1', '')
 
 
 @pytest.mark.asyncio
@@ -250,3 +250,27 @@ async def test_log_chapters_wait_for_wraps_a_hung_seam_call(fake_engine, monkeyp
     result = await logs._log_chapters(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
     assert result['ok'] is False
     assert result['error_type'] == 'Timeout'
+
+
+@pytest.mark.asyncio
+async def test_log_chapters_log_not_found_maps_to_not_found(fake_engine):
+    """The seam-exception branch of _log_chapters: LogNotFound gets the same
+    NotFound envelope as the empty-chapters case.
+    """
+    fake_engine.log_chapters_result = LogNotFound('p1')
+
+    result = await logs._log_chapters(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
+
+    assert result['ok'] is False
+    assert result['error_type'] == 'NotFound'
+
+
+@pytest.mark.asyncio
+async def test_log_read_log_not_found_maps_to_not_found(fake_engine):
+    fake_engine.log_read_result = LogNotFound('p1')
+
+    result = await logs._log_read(fake_engine, None, {'projectId': 'p1', 'source': 's1'})
+
+    assert result['ok'] is False
+    assert result['error_type'] == 'NotFound'
+    assert 'expired' in result['message']

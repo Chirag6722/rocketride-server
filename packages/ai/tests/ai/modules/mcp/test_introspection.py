@@ -277,3 +277,28 @@ async def test_describe_pipeline_caches_unknown_provider_lookup(fake_engine):
 
     assert len(result['components']) == 2
     assert fake_engine.get_service_calls == ['nope']
+
+
+@pytest.mark.asyncio
+async def test_validate_pipeline_timeout_returns_timeout_envelope(fake_engine, monkeypatch):
+    """Pins the shared `engine_call` wait_for wrap for the introspection group:
+    a regression that drops the wrap from `_common.engine_call` must fail here,
+    not just in the logs group (which carries its own wrap).
+    """
+    import asyncio
+
+    from ai.modules.mcp.tools import _common
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(fake_engine, 'validate', _hang)
+    monkeypatch.setattr(_common, 'DEFAULT_TIMEOUT_SECONDS', 0.01)
+
+    registry = ToolRegistry()
+    introspection.register(registry)
+
+    result = await registry.handler('validate_pipeline')(fake_engine, None, {'pipeline': {'components': []}})
+
+    assert result['ok'] is False
+    assert result['error_type'] == 'Timeout'

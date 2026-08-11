@@ -311,4 +311,7 @@ app.ontoolresult = (result) => {
 	}
 	root.replaceChildren(buildDropzone('Drop files here, or click to choose'));
 };
-app.connect();
+app.connect().catch(() => {
+	root.classList.remove('empty');
+	root.replaceChildren(el('p', 'empty', 'Could not connect to the MCP host.'));
+});

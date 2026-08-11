@@ -299,3 +299,33 @@ async def test_monitor_clamps_poll_parameters(fake_engine, monkeypatch):
     assert result['ok'] is True
     assert slept, 'expected at least one inter-poll sleep'
     assert all(s >= visibility.MIN_INTERVAL_SECONDS for s in slept)
+
+
+@pytest.mark.asyncio
+async def test_monitor_oversized_timeout_is_clamped_to_max(fake_engine, monkeypatch):
+    """A never-terminal task with `timeout: 999999` must stop polling at
+    MAX_TIMEOUT_SECONDS. The clamp test above only pins the interval floor
+    (its status sequence turns terminal before any deadline applies); this
+    one pins the timeout cap itself, deterministically via a fake clock.
+    """
+    _no_sleep(monkeypatch)
+    # Always-running: exhaustion repeats the last status, so the poll loop
+    # can only be ended by the (clamped) deadline.
+    fake_engine._task_statuses = [{'state': 3, 'completed': False}]
+
+    # Each clock read advances 100s: the MAX_TIMEOUT_SECONDS=300 deadline is
+    # crossed within a handful of polls, while an unclamped 999999s deadline
+    # would need thousands.
+    ticks = itertools.count(start=0.0, step=100.0)
+    monkeypatch.setattr('time.monotonic', lambda: next(ticks))
+
+    registry = ToolRegistry()
+    visibility.register(registry)
+
+    result = await registry.handler('monitor')(
+        fake_engine, None, {'task_token': 'tok-1', 'timeout': 999999, 'interval': 1}
+    )
+
+    assert result['ok'] is True
+    assert result['terminal'] is False
+    assert len(fake_engine.get_task_status_calls) <= 10, 'deadline was not clamped to MAX_TIMEOUT_SECONDS'

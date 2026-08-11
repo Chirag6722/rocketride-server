@@ -91,8 +91,11 @@ class _FakeLogApi:
         # log_traces(chapter_begin_seq=...) to control the lookup result.
         self.chapters_result = None
 
-    async def chapters(self, project_id: str, source: str, run_kind: str) -> dict:
-        self.chapters_calls.append({'project_id': project_id, 'source': source, 'run_kind': run_kind})
+    # Signatures mirror the real SDK exactly (team_id is KEYWORD-ONLY there):
+    # a positional third argument must fail here the same way it fails live.
+
+    async def chapters(self, project_id: str, source: str, *, team_id: str = '') -> dict:
+        self.chapters_calls.append({'project_id': project_id, 'source': source, 'team_id': team_id})
         if self.chapters_result is not None:
             return self.chapters_result
         return {'project_id': project_id, 'chapters': []}
@@ -101,7 +104,8 @@ class _FakeLogApi:
         self,
         project_id: str,
         source: str,
-        run_kind: str,
+        *,
+        team_id: str = '',
         from_seq: int = None,
         cursor: int = None,
         max_events: int = None,
@@ -111,7 +115,7 @@ class _FakeLogApi:
             {
                 'project_id': project_id,
                 'source': source,
-                'run_kind': run_kind,
+                'team_id': team_id,
                 'from_seq': from_seq,
                 'cursor': cursor,
                 'max_events': max_events,
@@ -120,8 +124,8 @@ class _FakeLogApi:
         )
         return {'project_id': project_id, 'events': []}
 
-    def open_event_stream(self, project_id: str, source: str, run_kind: str) -> _FakeEventSession:
-        self.open_event_stream_calls.append({'project_id': project_id, 'source': source, 'run_kind': run_kind})
+    def open_event_stream(self, project_id: str, source: str, *, team_id: str = '') -> _FakeEventSession:
+        self.open_event_stream_calls.append({'project_id': project_id, 'source': source, 'team_id': team_id})
         return self._session
 
 
@@ -543,21 +547,21 @@ def test_base_url_normalizes_scheme_and_strips_trailing_slash():
 
 
 async def test_log_chapters_calls_sdk_with_args():
-    """log_chapters forwards project_id, source, run_kind and returns the SDK dict."""
+    """log_chapters forwards project_id, source, team_id and returns the SDK dict."""
     client, fake = _make_client_with_fake()
 
-    result = await client.log_chapters('proj-1', 'source-a', 'prod')
+    result = await client.log_chapters('proj-1', 'source-a', 'team-prod')
 
-    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'team_id': 'team-prod'}]
     assert result == {'project_id': 'proj-1', 'chapters': []}
 
 
-async def test_log_chapters_defaults_run_kind_to_dev():
+async def test_log_chapters_defaults_team_id_to_own_dev_stream():
     client, fake = _make_client_with_fake()
 
     await client.log_chapters('proj-1', 'source-a')
 
-    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'dev'}]
+    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'team_id': ''}]
 
 
 async def test_log_read_forwards_keyword_args():
@@ -565,14 +569,14 @@ async def test_log_read_forwards_keyword_args():
     client, fake = _make_client_with_fake()
 
     result = await client.log_read(
-        'proj-1', 'source-a', 'prod', from_seq=10, cursor=20, max_events=50, types=['task_start']
+        'proj-1', 'source-a', 'team-prod', from_seq=10, cursor=20, max_events=50, types=['task_start']
     )
 
     assert fake.log.read_calls == [
         {
             'project_id': 'proj-1',
             'source': 'source-a',
-            'run_kind': 'prod',
+            'team_id': 'team-prod',
             'from_seq': 10,
             'cursor': 20,
             'max_events': 50,
@@ -590,9 +594,9 @@ async def test_log_traces_seeks_live_calls_get_traces_closes_finally():
     """
     client, fake = _make_client_with_fake()
 
-    result = await client.log_traces('proj-1', 'source-a', 'prod', n=10)
+    result = await client.log_traces('proj-1', 'source-a', 'team-prod', n=10)
 
-    assert fake.log.open_event_stream_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log.open_event_stream_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'team_id': 'team-prod'}]
     assert fake.log._session.seek_calls == ['live']
     assert fake.log._session.get_traces_calls == [10]
     assert fake.log._session.close_calls == 1
@@ -612,9 +616,9 @@ async def test_log_traces_with_chapter_begin_seq_seeks_chapter_end_time():
         ]
     }
 
-    result = await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=30)
+    result = await client.log_traces('proj-1', 'source-a', 'team-prod', n=10, chapter_begin_seq=30)
 
-    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log.chapters_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'team_id': 'team-prod'}]
     assert fake.log._session.seek_calls == [40.0]
     assert fake.log._session.get_traces_calls == [10]
     assert fake.log._session.close_calls == 1
@@ -626,7 +630,7 @@ async def test_log_traces_with_chapter_begin_seq_seeks_live_when_chapter_open():
     client, fake = _make_client_with_fake()
     fake.log.chapters_result = {'chapters': [{'beginTime': 1.0, 'beginSeq': 10, 'endTime': None, 'outcome': None}]}
 
-    await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=10)
+    await client.log_traces('proj-1', 'source-a', 'team-prod', n=10, chapter_begin_seq=10)
 
     assert fake.log._session.seek_calls == ['live']
 
@@ -639,7 +643,7 @@ async def test_log_traces_with_unknown_chapter_begin_seq_raises_keyerror():
     fake.log.chapters_result = {'chapters': [{'beginTime': 1.0, 'beginSeq': 10, 'endTime': 20.0, 'outcome': 'ok'}]}
 
     with pytest.raises(KeyError, match='999'):
-        await client.log_traces('proj-1', 'source-a', 'prod', n=10, chapter_begin_seq=999)
+        await client.log_traces('proj-1', 'source-a', 'team-prod', n=10, chapter_begin_seq=999)
 
     assert fake.log._session.seek_calls == []
     assert fake.log._session.get_traces_calls == []
@@ -652,7 +656,7 @@ async def test_log_traces_defaults_chapter_begin_seq_to_none_seeks_live():
     """
     client, fake = _make_client_with_fake()
 
-    await client.log_traces('proj-1', 'source-a', 'prod', n=10)
+    await client.log_traces('proj-1', 'source-a', 'team-prod', n=10)
 
     assert fake.log.chapters_calls == []
     assert fake.log._session.seek_calls == ['live']
@@ -666,9 +670,9 @@ async def test_log_trace_seeks_live_calls_get_trace_closes_in_finally():
     """
     client, fake = _make_client_with_fake()
 
-    result = await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
+    result = await client.log_trace('proj-1', 'source-a', 'team-prod', begin_seq=5)
 
-    assert fake.log.open_event_stream_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'run_kind': 'prod'}]
+    assert fake.log.open_event_stream_calls == [{'project_id': 'proj-1', 'source': 'source-a', 'team_id': 'team-prod'}]
     assert fake.log._session.seek_calls == ['live']
     assert fake.log._session.get_trace_calls == [5]
     assert fake.log._session.close_calls == 1
@@ -685,7 +689,7 @@ async def test_log_trace_wraps_keyerror_and_closes_session():
     fake.log._session._get_trace_raises = KeyError('not_found')
 
     with pytest.raises(LogNotFound):
-        await client.log_trace('proj-1', 'source-a', 'prod', begin_seq=5)
+        await client.log_trace('proj-1', 'source-a', 'team-prod', begin_seq=5)
 
     assert fake.log._session.close_calls == 1
 

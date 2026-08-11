@@ -19,7 +19,10 @@ const ICON_SVG =
 export function mountBrandHeader(title: string): void {
 	const header = document.createElement('div');
 	header.className = 'rr-header';
-	header.innerHTML = ICON_SVG;
+	// Parsed, not innerHTML-assigned: keeps the literal out of an XSS sink
+	// so a future interpolation into ICON_SVG can't silently become one.
+	const icon = new DOMParser().parseFromString(ICON_SVG, 'image/svg+xml').documentElement;
+	header.appendChild(document.importNode(icon, true));
 	const label = document.createElement('span');
 	label.className = 'rr-title';
 	label.textContent = title;

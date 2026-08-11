@@ -91,22 +91,27 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
     async def _startup() -> None:
         if _lifecycle['started']:
             return
-        _lifecycle['started'] = True
+        # Flag only after the transition succeeds: a failed enter must leave
+        # the other lifecycle path free to retry instead of returning early
+        # against a session manager that never actually started.
         await _stack.enter_async_context(session_manager.run())
+        _lifecycle['started'] = True
 
     async def _shutdown() -> None:
         if _lifecycle['stopped']:
             return
-        _lifecycle['stopped'] = True
         # Stop the session manager first so in-flight requests drain, then
         # release the shared engine client. try/finally guarantees the client
         # is closed even if session-manager teardown raises, and that the
         # session-manager context is exited even if client.close() raises.
+        # The stopped flag is set only after both complete, so a raising
+        # teardown stays retryable from the other lifecycle path.
         try:
             await _stack.aclose()
         finally:
             if _state['client'] is not None:
                 await _state['client'].close()
+        _lifecycle['stopped'] = True
 
     # Always register on the router — fires when there is no custom lifespan
     # (FakeServer / plain FastAPI).
@@ -161,11 +166,14 @@ def initModule(server: 'Any', config: Dict[str, Any]) -> None:
         # unauthenticated /mcp on a public bind is remote file access.
         # Refuse the bypass (auth stays on) rather than fail engine boot.
         server_config = getattr(server, 'config', None) or {}
-        bind_host = str(server_config.get('host', config.get('host', 'localhost')) or 'localhost')
+        _host = server_config.get('host', config.get('host', 'localhost'))
+        # An empty/None host means bind-all in most ASGI stacks (same as
+        # 0.0.0.0) — never coerce it to a loopback literal.
+        bind_host = str(_host) if _host is not None else ''
         if bind_host not in ('localhost', '127.0.0.1', '::1'):
             logging.getLogger(__name__).warning(
                 'MCP_DEV_NO_AUTH ignored: server binds %s (non-loopback); /mcp stays authenticated',
-                bind_host,
+                bind_host or '<unset/bind-all>',
             )
             dev_no_auth = False
     if dev_no_auth:

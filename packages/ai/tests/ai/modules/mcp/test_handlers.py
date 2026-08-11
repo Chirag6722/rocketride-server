@@ -144,9 +144,9 @@ async def test_list_tools_reflects_registry(monkeypatch, fake_engine):
 
 @pytest.mark.asyncio
 async def test_list_tools_reflects_real_register_all(fake_engine):
-    """With the real `register_all`, the server serves the introspection,
-    execution, and capability tools (more tool groups land as later tasks
-    are wired in).
+    """With the real `register_all`, the server serves the complete tool
+    surface pinned by `conftest.EXPECTED_TOOL_NAMES`: introspection,
+    execution, capability, visibility, and logs.
     """
     import ai.modules.mcp.handlers as handlers_mod
 

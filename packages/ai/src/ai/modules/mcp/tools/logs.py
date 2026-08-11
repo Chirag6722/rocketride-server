@@ -2,7 +2,9 @@
 """DVR run-log tools: chapters, paged events, and per-object traces.
 
 Backed by the engine's persisted continuum (``rrext_log``) — works for past
-and live runs, keyed by (projectId, source, runKind), never task tokens.
+and live runs, keyed by (projectId, source[, teamId]), never task tokens.
+The scope is the kind: a ``teamId`` addresses that team's deploy continuum,
+omitting it addresses your own dev stream.
 Runs recorded with pipelineTraceLevel 'none' have no flow events: chapters
 and console still exist, but traces come back empty.
 """
@@ -28,7 +30,10 @@ _ADDRESSING_HINT = 'use the projectId and source returned by run_pipeline / run_
 _KEY_SCHEMA = {
     'projectId': {'type': 'string', 'description': 'Pipeline project id (returned by run tools)'},
     'source': {'type': 'string', 'description': 'Source component id (returned by run tools)'},
-    'runKind': {'type': 'string', 'enum': ['dev', 'deploy'], 'description': "Continuum kind (default 'dev')"},
+    'teamId': {
+        'type': 'string',
+        'description': "Team id addressing that team's deploy continuum; omit for your own dev runs",
+    },
 }
 
 
@@ -38,17 +43,17 @@ def _require_key(args: Dict[str, Any]):
     if not project_id or not source:
         missing = 'projectId' if not project_id else 'source'
         return None, _bad(f'{missing} is required', _ADDRESSING_HINT)
-    return (project_id, source, args.get('runKind') or 'dev'), None
+    return (project_id, source, args.get('teamId') or ''), None
 
 
 async def _log_chapters(client, tasks, args: Dict[str, Any]) -> dict:
     key, err = _require_key(args)
     if err:
         return err
-    project_id, source, run_kind = key
+    project_id, source, team_id = key
     try:
         result = await asyncio.wait_for(
-            client.log_chapters(project_id, source, run_kind), timeout=DEFAULT_TIMEOUT_SECONDS
+            client.log_chapters(project_id, source, team_id), timeout=DEFAULT_TIMEOUT_SECONDS
         )
     except asyncio.TimeoutError:
         return _timeout('log_chapters timed out waiting for the engine', 'retry log_chapters')
@@ -77,7 +82,7 @@ async def _log_read(client, tasks, args: Dict[str, Any]) -> dict:
     key, err = _require_key(args)
     if err:
         return err
-    project_id, source, run_kind = key
+    project_id, source, team_id = key
     # Floored to >=1 (a caller-supplied 0 or negative maxEvents would
     # otherwise reach the engine as-is) and still capped at LOG_READ_MAX_EVENTS.
     try:
@@ -89,7 +94,7 @@ async def _log_read(client, tasks, args: Dict[str, Any]) -> dict:
             client.log_read(
                 project_id,
                 source,
-                run_kind,
+                team_id,
                 from_seq=args.get('fromSeq'),
                 cursor=args.get('cursor'),
                 max_events=max_events,
@@ -122,7 +127,7 @@ async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
     key, err = _require_key(args)
     if err:
         return err
-    project_id, source, run_kind = key
+    project_id, source, team_id = key
     chapter_begin_seq = args.get('chapterBeginSeq')
     try:
         n = max(LOG_TRACES_MIN_N, min(int(args.get('n') or LOG_TRACES_DEFAULT_N), LOG_TRACES_MAX_N))
@@ -134,7 +139,7 @@ async def _log_traces(client, tasks, args: Dict[str, Any]) -> dict:
             client.log_traces(
                 project_id,
                 source,
-                run_kind,
+                team_id,
                 n=n,
                 chapter_begin_seq=chapter_begin_seq,
             ),
@@ -166,7 +171,7 @@ async def _log_trace(client, tasks, args: Dict[str, Any]) -> dict:
     key, err = _require_key(args)
     if err:
         return err
-    project_id, source, run_kind = key
+    project_id, source, team_id = key
     begin_seq = args.get('beginSeq')
     if begin_seq is None:
         return _bad('beginSeq is required', 'get it from log_traces (each trace summary carries beginSeq)')
@@ -176,7 +181,7 @@ async def _log_trace(client, tasks, args: Dict[str, Any]) -> dict:
         return _bad('beginSeq must be an integer', 'get it from log_traces (each trace summary carries beginSeq)')
     try:
         result = await asyncio.wait_for(
-            client.log_trace(project_id, source, run_kind, begin_seq=begin_seq),
+            client.log_trace(project_id, source, team_id, begin_seq=begin_seq),
             timeout=DEFAULT_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

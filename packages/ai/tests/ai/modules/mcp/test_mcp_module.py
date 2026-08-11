@@ -149,6 +149,24 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch, 
 
     monkeypatch.setattr(mcp_module, 'build_mcp_server', _capturing_build_mcp_server)
 
+    # Record the session-manager drain alongside the engine close so the
+    # RELATIVE order is pinned — 'closed' first would pass a bare "was it
+    # closed" check while violating the drain-then-close contract.
+    import contextlib as _contextlib
+
+    real_session_manager_cls = mcp_module.StreamableHTTPSessionManager
+
+    class RecordingSessionManager(real_session_manager_cls):
+        @_contextlib.asynccontextmanager
+        async def run(self):
+            async with super().run():
+                try:
+                    yield
+                finally:
+                    close_events.append('drained')
+
+    monkeypatch.setattr(mcp_module, 'StreamableHTTPSessionManager', RecordingSessionManager)
+
     srv = fake_web_server
     mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
 
@@ -166,4 +184,100 @@ async def test_shutdown_closes_engine_client_after_session_manager(monkeypatch, 
     for handler in srv.app.router.on_shutdown:
         await handler()
 
-    assert close_events == ['closed']
+    # 'drained' must precede 'closed' — the ordering this test exists to pin.
+    assert close_events == ['drained', 'closed']
+
+
+@pytest.mark.asyncio
+async def test_startup_failure_leaves_lifecycle_retryable(monkeypatch, fake_web_server):
+    """A raising session-manager enter must not latch the started flag: the
+    other lifecycle path (router event vs chained hook) must be able to retry
+    instead of returning early against a manager that never started.
+    """
+    import contextlib as _contextlib
+
+    import ai.modules.mcp as mcp_module
+
+    attempts = []
+    real_session_manager_cls = mcp_module.StreamableHTTPSessionManager
+
+    class FlakySessionManager(real_session_manager_cls):
+        @_contextlib.asynccontextmanager
+        async def run(self):
+            attempts.append('enter')
+            if len(attempts) == 1:
+                raise RuntimeError('startup boom')
+            async with super().run():
+                yield
+
+    monkeypatch.setattr(mcp_module, 'StreamableHTTPSessionManager', FlakySessionManager)
+
+    srv = fake_web_server
+    mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
+
+    with pytest.raises(RuntimeError, match='startup boom'):
+        for handler in srv.app.router.on_startup:
+            await handler()
+
+    # Retry actually re-enters instead of hitting a latched started flag.
+    for handler in srv.app.router.on_startup:
+        await handler()
+    assert attempts == ['enter', 'enter']
+
+    for handler in srv.app.router.on_shutdown:
+        await handler()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_failure_leaves_lifecycle_retryable(monkeypatch, fake_web_server):
+    """A raising engine-client close must not latch the stopped flag: a second
+    shutdown pass must reach close() again rather than returning early with
+    the client still open.
+    """
+    from mcp.client import Client
+
+    import ai.modules.mcp as mcp_module
+
+    close_calls = []
+
+    class FlakyCloseEngine:
+        async def list_tasks(self):
+            return []
+
+        async def deploy_list(self):
+            return []
+
+        async def close(self):
+            close_calls.append('close')
+            if len(close_calls) == 1:
+                raise RuntimeError('close boom')
+
+    monkeypatch.setattr(mcp_module, 'make_engine_client', lambda cfg, on_event=None: FlakyCloseEngine())
+
+    captured = {}
+    real_build_mcp_server = mcp_module.build_mcp_server
+
+    def _capturing_build_mcp_server(*args, **kwargs):
+        server = real_build_mcp_server(*args, **kwargs)
+        captured['server'] = server
+        return server
+
+    monkeypatch.setattr(mcp_module, 'build_mcp_server', _capturing_build_mcp_server)
+
+    srv = fake_web_server
+    mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
+
+    for handler in srv.app.router.on_startup:
+        await handler()
+
+    # Force lazy engine-client creation so shutdown has something to close.
+    async with Client(captured['server']) as client:
+        await client.read_resource('rocketride://status')
+
+    with pytest.raises(RuntimeError, match='close boom'):
+        for handler in srv.app.router.on_shutdown:
+            await handler()
+
+    for handler in srv.app.router.on_shutdown:
+        await handler()
+    assert close_calls == ['close', 'close']

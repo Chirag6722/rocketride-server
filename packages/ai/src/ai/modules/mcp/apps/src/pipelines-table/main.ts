@@ -149,4 +149,7 @@ app.ontoolresult = (result) => {
 		console.error('render failed', err);
 	}
 };
-app.connect();
+app.connect().catch((err) => {
+	const msg = err instanceof Error ? err.message : String(err);
+	showError(`Could not connect to the MCP host: ${msg}`);
+});

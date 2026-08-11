@@ -26,6 +26,7 @@ async def test_webserver_use_mcp_does_not_raise_and_mounts_route(monkeypatch, fa
     Uses the module's own `make_engine_client` monkeypatch (as the other MCP
     module tests do) so no real ROCKETRIDE_URI/AUTH is required.
     """
+    pytest.importorskip('rocketlib')  # WebServer needs the engine env
     from ai.web.server import WebServer
     import ai.modules.mcp as mcp_module
 
@@ -54,5 +55,9 @@ async def test_webserver_use_mcp_default_mounts_authenticated(monkeypatch, fake_
 
     paths = {getattr(r, 'path', None) for r in server.app.routes}
     assert any(p and p.startswith('/mcp') for p in paths)
-    public = list(getattr(server, '_public_paths', []) or [])
+    # _public_paths must exist (a rename would silently void this assertion
+    # via a getattr fallback), and neither mount-path form may be public.
+    assert hasattr(server, '_public_paths'), 'WebServer public-path backing list moved/renamed'
+    public = list(server._public_paths or [])
     assert '/mcp' not in public
+    assert '/mcp/' not in public

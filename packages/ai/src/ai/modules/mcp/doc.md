@@ -54,7 +54,8 @@ enforced entirely inside the SDK's inbound classifier:
 | `Mcp-Name` | the body's `name` (`tools/call`, `prompts/get`) or `uri` (`resources/read`) param | only `tools/call`, `prompts/get`, `resources/read` |
 
 `MCP-Protocol-Version` is also checked at this rung: it must equal
-`params._meta.protocolVersion` in the body, or the request is rejected the same way.
+`params._meta["io.modelcontextprotocol/protocolVersion"]` in the body, or the
+request is rejected the same way.
 Legacy-path requests (see above) are not subject to this header rung at all — it is
 only exercised on the modern route.
 
@@ -66,9 +67,9 @@ on every `CacheableResult` this module returns:
 | Result | `ttl_ms` | `cache_scope` | Rationale |
 | --- | --- | --- | --- |
 | `tools/list` | `3_600_000` (1h) | `private` | Static per build, but kept private (not public) because tool listings become entitlement-filtered once node-auth lands. |
-| `resources/list` | `30_000` (30s) | `private` | Reflects currently-running tasks — short-lived, not build-static. |
+| `resources/list` | `30_000` (30s) | `private` | Near-static catalog (fixed descriptors plus whichever widget bundles are built), but cheap enough to refresh that it gets a short TTL rather than the 1h one. |
 | `rocketride://status` read | `0` | `private` | Live connection/task-count snapshot — immediately stale, must not be cached at all. |
-| `rocketride://pipelines` read | `30_000` (30s) | `private` | Reflects running tasks, same rationale as `resources/list`. |
+| `rocketride://pipelines` read | `30_000` (30s) | `private` | Reflects registered deployments (`deploy_list`) — changes on `deploy_add`/`deploy_remove`, not build-static. |
 
 ## How it boots
 
@@ -187,7 +188,7 @@ works for both past and live runs:
 
 | Tool | Purpose | Key args |
 | --- | --- | --- |
-| `log_chapters` | List recorded runs (chapters) for a pipeline — begin/end times, `beginSeq`, outcome. | `projectId`, `source`, `runKind` (default `dev`) |
+| `log_chapters` | List recorded runs (chapters) for a pipeline — begin/end times, `beginSeq`, outcome. | `projectId`, `source`, `teamId` (optional — omit for your own dev runs) |
 | `log_read` | Read raw run-log events, cursor-paged; `types=["output"]` returns console lines only. Pass `nextCursor` back as `cursor` to continue. | `projectId`, `source`, `fromSeq`, `cursor`, `maxEvents` (floored at 1, capped at 200), `types` |
 | `log_traces` | List per-object trace summaries (one per file/document that traveled the pipeline). Each carries `beginSeq` — the permanent trace id. Returns `{traces, open}` — `traces` holds finished runs, `open` holds ones still in flight. Defaults to the latest/live run; pass `chapterBeginSeq` (from `log_chapters`) to address a specific past run instead. | `projectId`, `source`, `n` (default 20, clamped 1-100), `chapterBeginSeq` |
 | `log_trace` | Fetch one object's full begin-to-end journey through the pipeline by its `beginSeq`: a summary plus every component enter/leave with lane data, plus node narration. Returns `{beginSeq, summary, events}`. | `projectId`, `source`, `beginSeq` |
@@ -195,7 +196,9 @@ works for both past and live runs:
 Worst case, one `log_read` page is ≈ 200 × 64KB (`maxEvents` × per-event cap) of
 in-band JSON-RPC result — budget for that on a maxed-out page.
 
-Runs are keyed by `(projectId, source, runKind)`, addressed with the `projectId`/
+Runs are keyed by `(projectId, source[, teamId])` — the scope is the kind: a
+`teamId` addresses that team's deploy continuum, omitting it addresses your own
+dev stream. Address them with the `projectId`/
 `source` that `run_pipeline`/`run_dropper_pipe` now return (see Execution above),
 not by task token — the run log outlives the task. Retention is 7 days (dev) / 30
 days (deploy), or earlier under segment/chapter caps. An unrecognized `projectId`/

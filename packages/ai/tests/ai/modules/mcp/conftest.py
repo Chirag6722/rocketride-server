@@ -246,21 +246,21 @@ class FakeEngineClient:
     # (so assertions name fields, not tuple positions), and a scripted
     # Exception result is raised rather than returned.
 
-    async def log_chapters(self, project_id, source, run_kind='dev'):
-        self.log_calls.append({'method': 'chapters', 'project_id': project_id, 'source': source, 'run_kind': run_kind})
+    async def log_chapters(self, project_id, source, team_id=''):
+        self.log_calls.append({'method': 'chapters', 'project_id': project_id, 'source': source, 'team_id': team_id})
         if isinstance(self.log_chapters_result, Exception):
             raise self.log_chapters_result
         return self.log_chapters_result
 
     async def log_read(
-        self, project_id, source, run_kind='dev', *, from_seq=None, cursor=None, max_events=None, types=None
+        self, project_id, source, team_id='', *, from_seq=None, cursor=None, max_events=None, types=None
     ):
         self.log_calls.append(
             {
                 'method': 'read',
                 'project_id': project_id,
                 'source': source,
-                'run_kind': run_kind,
+                'team_id': team_id,
                 'from_seq': from_seq,
                 'cursor': cursor,
                 'max_events': max_events,
@@ -271,13 +271,13 @@ class FakeEngineClient:
             raise self.log_read_result
         return self.log_read_result
 
-    async def log_traces(self, project_id, source, run_kind='dev', *, n=20, chapter_begin_seq=None):
+    async def log_traces(self, project_id, source, team_id='', *, n=20, chapter_begin_seq=None):
         self.log_calls.append(
             {
                 'method': 'traces',
                 'project_id': project_id,
                 'source': source,
-                'run_kind': run_kind,
+                'team_id': team_id,
                 'n': n,
                 'chapter_begin_seq': chapter_begin_seq,
             }
@@ -286,13 +286,13 @@ class FakeEngineClient:
             raise self.log_traces_result
         return self.log_traces_result
 
-    async def log_trace(self, project_id, source, run_kind='dev', *, begin_seq=0):
+    async def log_trace(self, project_id, source, team_id='', *, begin_seq=0):
         self.log_calls.append(
             {
                 'method': 'trace',
                 'project_id': project_id,
                 'source': source,
-                'run_kind': run_kind,
+                'team_id': team_id,
                 'begin_seq': begin_seq,
             }
         )

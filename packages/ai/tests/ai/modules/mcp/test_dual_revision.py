@@ -105,9 +105,12 @@ async def _mcp_test_app(monkeypatch, fake_engine):
     srv = FakeWebServer()
     mcp_module.initModule(srv, {'mcp_dev_no_auth': True})
 
-    for handler in srv.app.router.on_startup:
-        await handler()
     try:
+        # Inside the try: a handler raising mid-startup must still reach the
+        # finally-shutdown, or the session-manager task group leaks and the
+        # test fails on a teardown artifact instead of the real error.
+        for handler in srv.app.router.on_startup:
+            await handler()
         transport = httpx.ASGITransport(app=srv.app)
         async with httpx.AsyncClient(
             transport=transport, base_url='http://testserver', follow_redirects=True

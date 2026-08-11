@@ -57,12 +57,12 @@ class EngineClient(Protocol):
     async def deploy_update(
         self, project_id: str, pipeline: Optional[dict] = None, schedule: Optional[str] = None
     ) -> None: ...
-    async def log_chapters(self, project_id: str, source: str, run_kind: str = 'dev') -> Dict[str, Any]: ...
+    async def log_chapters(self, project_id: str, source: str, team_id: str = '') -> Dict[str, Any]: ...
     async def log_read(
         self,
         project_id: str,
         source: str,
-        run_kind: str = 'dev',
+        team_id: str = '',
         *,
         from_seq: Optional[int] = None,
         cursor: Optional[int] = None,
@@ -73,13 +73,13 @@ class EngineClient(Protocol):
         self,
         project_id: str,
         source: str,
-        run_kind: str = 'dev',
+        team_id: str = '',
         *,
         n: int = 20,
         chapter_begin_seq: Optional[int] = None,
     ) -> Dict[str, Any]: ...
     async def log_trace(
-        self, project_id: str, source: str, run_kind: str = 'dev', *, begin_seq: int = 0
+        self, project_id: str, source: str, team_id: str = '', *, begin_seq: int = 0
     ) -> Dict[str, Any]: ...
     async def close(self) -> None: ...
 
@@ -248,14 +248,14 @@ class WsEngineClient:
     ) -> None:
         await self._guarded(lambda: self._client.deploy.update(project_id, pipeline=pipeline, schedule=schedule))
 
-    async def log_chapters(self, project_id: str, source: str, run_kind: str = 'dev') -> Dict[str, Any]:
-        return await self._guarded(lambda: self._client.log.chapters(project_id, source, run_kind))
+    async def log_chapters(self, project_id: str, source: str, team_id: str = '') -> Dict[str, Any]:
+        return await self._guarded(lambda: self._client.log.chapters(project_id, source, team_id=team_id))
 
     async def log_read(
         self,
         project_id: str,
         source: str,
-        run_kind: str = 'dev',
+        team_id: str = '',
         *,
         from_seq: Optional[int] = None,
         cursor: Optional[int] = None,
@@ -266,7 +266,7 @@ class WsEngineClient:
             lambda: self._client.log.read(
                 project_id,
                 source,
-                run_kind,
+                team_id=team_id,
                 from_seq=from_seq,
                 cursor=cursor,
                 max_events=max_events,
@@ -278,7 +278,7 @@ class WsEngineClient:
         self,
         project_id: str,
         source: str,
-        run_kind: str = 'dev',
+        team_id: str = '',
         *,
         n: int = 20,
         chapter_begin_seq: Optional[int] = None,
@@ -302,12 +302,12 @@ class WsEngineClient:
         ``beginSeq``.
         """
         await self._ensure_connected()
-        session = self._client.log.open_event_stream(project_id, source, run_kind)
+        session = self._client.log.open_event_stream(project_id, source, team_id=team_id)
         try:
             if chapter_begin_seq is None:
                 await session.seek('live')
             else:
-                chapters_result = await self._client.log.chapters(project_id, source, run_kind)
+                chapters_result = await self._client.log.chapters(project_id, source, team_id=team_id)
                 chapters = (chapters_result or {}).get('chapters') or []
                 chapter = next((c for c in chapters if c.get('beginSeq') == chapter_begin_seq), None)
                 if chapter is None:
@@ -321,9 +321,7 @@ class WsEngineClient:
         finally:
             session.close_event_stream()
 
-    async def log_trace(
-        self, project_id: str, source: str, run_kind: str = 'dev', *, begin_seq: int = 0
-    ) -> Dict[str, Any]:
+    async def log_trace(self, project_id: str, source: str, team_id: str = '', *, begin_seq: int = 0) -> Dict[str, Any]:
         """Return the SDK's raw trace-detail shape verbatim: ``{'summary': {...}, 'events': [...]}``.
 
         This seam is a faithful transport — it does not unwrap ``events`` out
@@ -331,7 +329,7 @@ class WsEngineClient:
         for picking the fields they need out of the dict.
         """
         await self._ensure_connected()
-        session = self._client.log.open_event_stream(project_id, source, run_kind)
+        session = self._client.log.open_event_stream(project_id, source, team_id=team_id)
         try:
             await session.seek('live')
             try:
