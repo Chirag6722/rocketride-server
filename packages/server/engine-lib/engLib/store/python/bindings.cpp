@@ -48,7 +48,12 @@
 //=============================================================================
 
 #include <engLib/eng.h>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_set>
 
 //-----------------------------------------------------------------------------
 // These are generic definition helps that help in writing declarations.
@@ -505,7 +510,22 @@ PYBIND11_EMBEDDED_MODULE(engLib, engLib) {
     ///     .py file, not bindings.cpp
     ///------------------------------------------------------------
     auto getPythonCallerLocation =
-        []() -> std::optional<std::tuple<std::string, int, std::string>> {
+        []() -> std::optional<std::tuple<std::string_view, int, std::string_view>> {
+        // The names are interned for the life of the process, and the views handed out
+        // below point into that pool. ap::Location holds string_views and Error keeps a
+        // Location by value, so a location built over a caller-local std::string outlives
+        // its own storage the moment that scope ends - every later read of it, such as the
+        // completionError property, then lands in freed memory. A pipeline's distinct
+        // file/function names are bounded by its Python sources, so the pool stays small;
+        // it is never pruned, which is what makes the views permanently safe. unordered_set
+        // is node-based, so inserting never moves an element another view already points at.
+        static std::mutex internLock;
+        static std::unordered_set<std::string> internPool;
+        const auto intern = [](std::string value) -> std::string_view {
+            const std::lock_guard<std::mutex> guard(internLock);
+            return *internPool.insert(std::move(value)).first;
+        };
+
         try {
             py::object frame = py::module_::import("sys").attr("_getframe")(0);
             py::str pathStr(frame.attr("f_code").attr("co_filename"));
@@ -515,7 +535,8 @@ PYBIND11_EMBEDDED_MODULE(engLib, engLib) {
             int line = py::cast<int>(frame.attr("f_lineno"));
             std::string func =
                 funcStr.attr("encode")("utf-8").cast<std::string>();
-            return std::make_tuple(std::move(path), line, std::move(func));
+            return std::make_tuple(intern(std::move(path)), line,
+                                   intern(std::move(func)));
         } catch (...) {
             return std::nullopt;
         }
