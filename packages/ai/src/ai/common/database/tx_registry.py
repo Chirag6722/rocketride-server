@@ -209,11 +209,13 @@ class TransactionRegistry:
             return
         for i in range(len(held.savepoints) - 1, -1, -1):
             if held.savepoints[i][0] == name:
-                unwound = held.savepoints[i:]
-                del held.savepoints[i:]
-                for _, sp in reversed(unwound):
+                # Resolve BEFORE deleting: if a commit/rollback raises mid-unwind,
+                # unresolved entries stay on the stack for _drop() to clean up.
+                for j in range(len(held.savepoints) - 1, i - 1, -1):
+                    sp = held.savepoints[j][1]
                     if sp.is_active:
                         sp.commit() if m.group('rel') else sp.rollback()
+                    del held.savepoints[j]
                 return
         raise ValueError(f'unknown savepoint: {name}')
 

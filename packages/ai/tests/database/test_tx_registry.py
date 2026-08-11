@@ -337,3 +337,4 @@ def test_session_rollback_resolves_open_savepoints(registry_and_engine):
     reg.execute(sid, 'savepoint sp1')
     reg.rollback(sid)  # must not raise; nested resolved before root rollback
     assert eng.last_conn.closed
+    assert eng.last_conn.nested[0].rolled_back
