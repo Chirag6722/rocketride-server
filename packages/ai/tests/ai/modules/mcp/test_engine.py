@@ -109,6 +109,7 @@ class _FakeLogApi:
         from_seq: int = None,
         cursor: int = None,
         max_events: int = None,
+        max_bytes: int = None,
         types: list = None,
     ) -> dict:
         self.read_calls.append(
@@ -119,6 +120,7 @@ class _FakeLogApi:
                 'from_seq': from_seq,
                 'cursor': cursor,
                 'max_events': max_events,
+                'max_bytes': max_bytes,
                 'types': types,
             }
         )
@@ -569,7 +571,7 @@ async def test_log_read_forwards_keyword_args():
     client, fake = _make_client_with_fake()
 
     result = await client.log_read(
-        'proj-1', 'source-a', 'team-prod', from_seq=10, cursor=20, max_events=50, types=['task_start']
+        'proj-1', 'source-a', 'team-prod', from_seq=10, cursor=20, max_events=50, max_bytes=1024, types=['task_start']
     )
 
     assert fake.log.read_calls == [
@@ -580,6 +582,7 @@ async def test_log_read_forwards_keyword_args():
             'from_seq': 10,
             'cursor': 20,
             'max_events': 50,
+            'max_bytes': 1024,
             'types': ['task_start'],
         }
     ]

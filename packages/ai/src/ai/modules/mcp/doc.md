@@ -69,7 +69,7 @@ on every `CacheableResult` this module returns:
 | `tools/list` | `3_600_000` (1h) | `private` | Static per build, but kept private (not public) because tool listings become entitlement-filtered once node-auth lands. |
 | `resources/list` | `30_000` (30s) | `private` | Near-static catalog (fixed descriptors plus whichever widget bundles are built), but cheap enough to refresh that it gets a short TTL rather than the 1h one. |
 | `rocketride://status` read | `0` | `private` | Live connection/task-count snapshot — immediately stale, must not be cached at all. |
-| `rocketride://pipelines` read | `30_000` (30s) | `private` | Reflects registered deployments (`deploy_list`) — changes on `deploy_add`/`deploy_remove`, not build-static. |
+| `rocketride://pipelines` read | `30_000` (30s) | `private` | Reflects registered deployments (`deploy_list`) — changes on `deploy_add`/`deploy_update`/`deploy_remove`, not build-static. |
 
 ## How it boots
 
@@ -193,8 +193,12 @@ works for both past and live runs:
 | `log_traces` | List per-object trace summaries (one per file/document that traveled the pipeline). Each carries `beginSeq` — the permanent trace id. Returns `{traces, open}` — `traces` holds finished runs, `open` holds ones still in flight. Defaults to the latest/live run; pass `chapterBeginSeq` (from `log_chapters`) to address a specific past run instead. | `projectId`, `source`, `n` (default 20, clamped 1-100), `chapterBeginSeq` |
 | `log_trace` | Fetch one object's full begin-to-end journey through the pipeline by its `beginSeq`: a summary plus every component enter/leave with lane data, plus node narration. Returns `{beginSeq, summary, events}`. | `projectId`, `source`, `beginSeq` |
 
-Worst case, one `log_read` page is ≈ 200 × 64KB (`maxEvents` × per-event cap) of
-in-band JSON-RPC result — budget for that on a maxed-out page.
+A `log_read` page is bounded two ways: `maxEvents` (≤ 200) and a fixed 1 MiB
+total-byte cap forwarded to the engine as `max_bytes` — so a maxed-out page is
+≈ 1 MiB of in-band JSON-RPC result, not `maxEvents` × the 64KB per-event cap.
+At most 4 `log_read` calls run concurrently (module-level semaphore); each
+in-flight page can pin ~3× its size while `handlers.py` holds the result, its
+JSON text, and the parsed `structured_content`.
 
 Runs are keyed by `(projectId, source[, teamId])` — the scope is the kind: a
 `teamId` addresses that team's deploy continuum, omitting it addresses your own

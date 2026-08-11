@@ -67,6 +67,7 @@ class EngineClient(Protocol):
         from_seq: Optional[int] = None,
         cursor: Optional[int] = None,
         max_events: Optional[int] = None,
+        max_bytes: Optional[int] = None,
         types: Optional[List[str]] = None,
     ) -> Dict[str, Any]: ...
     async def log_traces(
@@ -260,6 +261,7 @@ class WsEngineClient:
         from_seq: Optional[int] = None,
         cursor: Optional[int] = None,
         max_events: Optional[int] = None,
+        max_bytes: Optional[int] = None,
         types: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         return await self._guarded(
@@ -270,6 +272,7 @@ class WsEngineClient:
                 from_seq=from_seq,
                 cursor=cursor,
                 max_events=max_events,
+                max_bytes=max_bytes,
                 types=types,
             )
         )

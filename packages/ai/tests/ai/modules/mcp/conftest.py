@@ -253,7 +253,7 @@ class FakeEngineClient:
         return self.log_chapters_result
 
     async def log_read(
-        self, project_id, source, team_id='', *, from_seq=None, cursor=None, max_events=None, types=None
+        self, project_id, source, team_id='', *, from_seq=None, cursor=None, max_events=None, max_bytes=None, types=None
     ):
         self.log_calls.append(
             {
@@ -264,6 +264,7 @@ class FakeEngineClient:
                 'from_seq': from_seq,
                 'cursor': cursor,
                 'max_events': max_events,
+                'max_bytes': max_bytes,
                 'types': types,
             }
         )

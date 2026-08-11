@@ -18,6 +18,15 @@ from ..tooling import ToolRegistry
 
 DEFAULT_TIMEOUT_SECONDS = 30
 LOG_READ_MAX_EVENTS = 200
+# Total-byte bound per log_read page, forwarded to the SDK's max_bytes. The
+# event cap alone is not a size bound: 200 events x 64KiB values is ~12.5MiB,
+# and handlers.py holds the result, its JSON text, and the parsed
+# structured_content at once.
+LOG_READ_MAX_BYTES = 1_048_576
+# Bound on concurrent log_read calls: each in-flight page can pin
+# ~3x LOG_READ_MAX_BYTES (result + JSON text + structured_content), so
+# unbounded concurrency multiplies worst-case memory.
+_LOG_READ_CONCURRENCY = asyncio.Semaphore(4)
 LOG_TRACES_MIN_N = 1
 LOG_TRACES_MAX_N = 100
 LOG_TRACES_DEFAULT_N = 20
@@ -90,18 +99,20 @@ async def _log_read(client, tasks, args: Dict[str, Any]) -> dict:
     except (TypeError, ValueError):
         return _bad('maxEvents must be an integer', 'omit it to use the default')
     try:
-        result = await asyncio.wait_for(
-            client.log_read(
-                project_id,
-                source,
-                team_id,
-                from_seq=args.get('fromSeq'),
-                cursor=args.get('cursor'),
-                max_events=max_events,
-                types=args.get('types'),
-            ),
-            timeout=DEFAULT_TIMEOUT_SECONDS,
-        )
+        async with _LOG_READ_CONCURRENCY:
+            result = await asyncio.wait_for(
+                client.log_read(
+                    project_id,
+                    source,
+                    team_id,
+                    from_seq=args.get('fromSeq'),
+                    cursor=args.get('cursor'),
+                    max_events=max_events,
+                    max_bytes=LOG_READ_MAX_BYTES,
+                    types=args.get('types'),
+                ),
+                timeout=DEFAULT_TIMEOUT_SECONDS,
+            )
     except asyncio.TimeoutError:
         return _timeout(
             'log_read timed out waiting for the engine',

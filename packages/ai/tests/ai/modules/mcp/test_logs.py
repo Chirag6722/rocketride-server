@@ -88,6 +88,8 @@ async def test_log_read_caps_page_and_forwards_cursor(fake_engine):
     call = fake_engine.log_calls[0]
     assert call['method'] == 'read'
     assert call['max_events'] == logs.LOG_READ_MAX_EVENTS  # 5000 clamped to the cap
+    # The byte bound always rides along — the event cap alone is not a size cap.
+    assert call['max_bytes'] == logs.LOG_READ_MAX_BYTES
 
 
 @pytest.mark.asyncio

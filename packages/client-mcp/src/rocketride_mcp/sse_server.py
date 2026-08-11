@@ -187,6 +187,11 @@ def main():
     if _API_KEY:
         logger.info('MCP SSE server starting with API key authentication')
     else:
+        # run_pipeline uploads any file the server process can read, so an
+        # unauthenticated non-loopback bind is remote file access. Refuse to
+        # start rather than warn-and-serve.
+        if args.host not in ('localhost', '127.0.0.1', '::1'):
+            parser.error(f'refusing to bind {args.host} without authentication — set MCP_API_KEY (or bind localhost)')
         logger.warning('MCP SSE server starting WITHOUT authentication — set MCP_API_KEY to secure')
 
     app = create_app()
