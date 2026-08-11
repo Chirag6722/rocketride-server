@@ -295,16 +295,11 @@ class DatabaseInstanceBase(IInstanceBase, ABC):
                 result = self.IGlobal.tx_registry.execute(session_id, sql.strip(), params, row_mode)
             except KeyError:
                 raise ValueError(f'unknown or expired transaction session: {session_id}')
-            except Exception:
-                # A failed session-bound execute (e.g. max_execute_rows overflow)
-                # would otherwise leave the connection pinned until idle-reaping,
-                # with the aborted statement still committable; roll the session
-                # back to release it and discard the statement, then re-raise.
-                try:
-                    self.IGlobal.tx_registry.rollback(session_id)
-                except KeyError:
-                    pass
-                raise
+            # A failed statement leaves the session OPEN: Postgres marks the
+            # transaction aborted (commit degrades to rollback), MySQL leaves it
+            # usable. The client owns recovery — `rollback`, or `rollback to
+            # savepoint` for nested transactions — and the idle reaper is the
+            # backstop for abandoned sessions.
         else:
             result = self._executeRawQuery(sql.strip(), params, row_mode)
             if result is None:

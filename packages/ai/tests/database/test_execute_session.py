@@ -186,11 +186,13 @@ def test_stateless_execute_overflow_rolls_back_write(instance_with_sqlite_regist
     assert out['rows'] == []
 
 
-def test_session_execute_overflow_releases_session(instance_with_sqlite_registry):
-    """A session-bound execute that overflows rolls back and releases the session.
+def test_session_execute_overflow_keeps_session_alive(instance_with_sqlite_registry):
+    """A session-bound execute that overflows leaves the session open.
 
-    Otherwise the held connection stays pinned until idle-reaping and the aborted
-    statement remains committable.
+    The failed statement does not auto-destroy the session: the client owns
+    recovery via an explicit rollback (or `rollback to savepoint`), so the
+    connection stays pinned until the client releases it or the idle reaper
+    reclaims it.
     """
     inst = instance_with_sqlite_registry
     # 0-row cap so a session RETURNING overflows.
@@ -198,9 +200,18 @@ def test_session_execute_overflow_releases_session(instance_with_sqlite_registry
     sid = inst.begin({})['session_id']
     with pytest.raises(RuntimeError, match='max_rows'):
         inst.execute({'sql': "INSERT INTO t (v) VALUES ('x') RETURNING v", 'session_id': sid})
-    # The session was rolled back and released: reusing it now errors.
-    with pytest.raises(ValueError, match='unknown or expired'):
-        inst.commit({'session_id': sid})
+    # The session survives the failed statement: an explicit rollback succeeds.
+    assert inst.rollback({'session_id': sid}) == {'ok': True}
+
+
+def test_failed_statement_keeps_session_alive(instance_with_sqlite_registry):
+    """A syntactically invalid statement leaves the session open for recovery."""
+    inst = instance_with_sqlite_registry
+    sid = inst.begin({})['session_id']
+    with pytest.raises(Exception):
+        inst.execute({'sql': 'select broken', 'session_id': sid})
+    # Session must still exist: rollback succeeds instead of ValueError.
+    assert inst.rollback({'session_id': sid}) == {'ok': True}
 
 
 # ---------------------------------------------------------------------------
