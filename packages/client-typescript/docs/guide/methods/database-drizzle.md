@@ -141,7 +141,7 @@ await db.transaction(async (tx) => {
 
 If the callback throws, the driver rolls back and re-throws your original error — a failure during that rollback (the session already discarded, transport down) is swallowed rather than replacing it, so `catch` always sees the error that caused the rollback, not a secondary one.
 
-A transaction session left open with no activity is rolled back and reaped by the server after an idle timeout (300s by default); recover from a session that outlived it the same way you'd handle any other rollback failure.
+A transaction session left open with no activity is rolled back and reaped by the server after an idle timeout (300s by default), though the reaper is lazy and only sweeps stale sessions the next time a transaction starts on that node; recover from a session that outlived it the same way you'd handle any other rollback failure.
 
 ### Nested transactions and isolation config
 

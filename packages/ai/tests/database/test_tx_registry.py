@@ -115,6 +115,29 @@ def test_reaper_skips_in_flight_session():
     assert sid not in reg._sessions
 
 
+def test_failed_statement_still_refreshes_last_used():
+    """A failed statement leaves the session in a recoverable state (the caller
+    can roll back or retry), so it must not age toward the idle reaper the same
+    way a session with no activity at all does.
+    """
+    t = {'now': 0.0}
+    reg = TransactionRegistry(
+        _engine_shared(),
+        idle_timeout=10,
+        max_rows=1000,
+        clock=lambda: t['now'],
+    )
+    sid = reg.begin()
+    t['now'] = 5.0
+    with pytest.raises(Exception):
+        reg.execute(sid, 'SELECT * FROM nonexistent_table')
+    assert reg._sessions[sid].last_used == 5.0
+    t['now'] = 12.0  # 7s since the failed statement — still under idle_timeout=10
+    assert reg.reap_idle() == 0
+    assert sid in reg._sessions
+    reg.rollback(sid)
+
+
 def test_to_sqlalchemy_text_maps_placeholders():
     clause, binds = to_sqlalchemy_text('INSERT INTO t (a,b) VALUES ($1,$2)', ['p', 7])
     assert binds == {'b1': 'p', 'b2': 7}

@@ -32,6 +32,11 @@ from dataclasses import dataclass, field
 from sqlalchemy import text
 from sqlalchemy.sql.elements import TextClause
 
+
+# Quoted savepoint names (e.g. SAVEPOINT "Sp 1") don't match this pattern and
+# fall through to execute as raw SQL, bypassing the begin_nested() recovery
+# path in _handle_savepoint. Acceptable: Drizzle only ever emits simple spN
+# identifiers for its savepoints.
 _SAVEPOINT_STMT = re.compile(
     r'^\s*(?:(?P<sp>savepoint)|(?P<rel>release)\s+savepoint|(?P<rb>rollback)\s+to\s+savepoint)'
     r'\s+(?P<name>[A-Za-z_][\w]*)\s*;?\s*$',
@@ -214,18 +219,22 @@ class TransactionRegistry:
             with self._registry_lock:
                 if self._sessions.get(session_id) is not held:
                     raise KeyError(session_id)  # finalised/reaped while we waited
-            m = _SAVEPOINT_STMT.match(sql)
-            if m:
-                self._handle_savepoint(held, m)
+            # last_used refreshes whether the statement succeeds or fails: a
+            # failed statement leaves the session in a recoverable state (the
+            # caller can roll back or retry), so it shouldn't age toward reap.
+            try:
+                m = _SAVEPOINT_STMT.match(sql)
+                if m:
+                    self._handle_savepoint(held, m)
+                    return {'rows': [], 'affected_rows': 0}
+                clause, binds = to_sqlalchemy_text(sql, params)
+                result = held.conn.execute(clause, binds)
+                shaped = shape_execute_result(result, self._max_rows, row_mode)
+                if shaped is None:
+                    raise RuntimeError(f'query exceeded max_rows={self._max_rows}')
+                return shaped
+            finally:
                 held.last_used = self._clock()
-                return {'rows': [], 'affected_rows': 0}
-            clause, binds = to_sqlalchemy_text(sql, params)
-            result = held.conn.execute(clause, binds)
-            held.last_used = self._clock()
-            shaped = shape_execute_result(result, self._max_rows, row_mode)
-            if shaped is None:
-                raise RuntimeError(f'query exceeded max_rows={self._max_rows}')
-            return shaped
 
     def commit(self, session_id: str) -> None:
         """Commit the transaction and release the connection."""
