@@ -286,11 +286,11 @@ async function ensureCleanPipeline(client: RocketRideClient, token: string): Pro
 		'serialization: dates and numerics survive the JSON transport',
 		async () => {
 			const db = drizzle({ client: client.database, token: pipelineToken, nodeId: DB_NODE_ID });
-			const result = (await db.execute(sql`SELECT now() AS ts, 1.5::numeric AS num`)) as Array<Record<string, unknown>>;
-			expect(result).toHaveLength(1);
+			const result = (await db.execute(sql`SELECT now() AS ts, 1.5::numeric AS num`)) as unknown as { rows: Array<Record<string, unknown>>; rowCount: number };
+			expect(result.rows).toHaveLength(1);
 			// _sanitize_value: datetimes arrive as ISO strings, numerics as floats.
-			expect(typeof result[0].ts).toBe('string');
-			expect(Number(result[0].num)).toBeCloseTo(1.5);
+			expect(typeof result.rows[0].ts).toBe('string');
+			expect(Number(result.rows[0].num)).toBeCloseTo(1.5);
 		},
 		TEST_CONFIG.timeout
 	);

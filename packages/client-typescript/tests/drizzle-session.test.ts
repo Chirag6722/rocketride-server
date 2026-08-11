@@ -46,7 +46,7 @@ function makeFakeTransport(rowsFor: (sqlText: string) => unknown[]) {
 	const make = (sessionId?: string): PipesTransport => ({
 		async query(sqlText, params, method) {
 			calls.push({ sql: sqlText, params, method, sessionId });
-			return { rows: rowsFor(sqlText) };
+			return { rows: rowsFor(sqlText), affectedRows: 0 };
 		},
 		async begin() {
 			const sid = `sid-${++nextSession}`;
@@ -93,7 +93,7 @@ function makeFaultyTransport(opts: {
 			if (err) {
 				throw err;
 			}
-			return { rows: [] };
+			return { rows: [], affectedRows: 0 };
 		},
 		async begin() {
 			const sid = `sid-${++nextSession}`;

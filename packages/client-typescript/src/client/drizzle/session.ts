@@ -57,7 +57,7 @@ const mapResultRow = (drizzleUtils as unknown as {
  * whose `query` calls run inside the given server-side transaction session.
  */
 export interface PipesTransport {
-	query(sql: string, params: unknown[], method: 'all' | 'execute'): Promise<{ rows: unknown[] }>;
+	query(sql: string, params: unknown[], method: 'all' | 'execute'): Promise<{ rows: unknown[]; affectedRows: number }>;
 	begin(): Promise<string>;
 	commit(sessionId: string): Promise<void>;
 	rollback(sessionId: string): Promise<void>;
@@ -68,8 +68,26 @@ export interface PipesSessionOptions {
 	logger?: Logger;
 }
 
+/**
+ * Shape of a no-fields `execute()` result — mirrors node-postgres's
+ * `QueryResult` (`{ rows, rowCount, ... }`) so ported `r.rowCount` checks
+ * keep working. Mapped paths (selects, `.returning()`) still resolve to
+ * plain row arrays, not this shape.
+ *
+ * Generic over the row type (rather than an intersection over a fixed
+ * `rows: unknown[]`) because drizzle's polymorphic `this['row']` type can
+ * only appear directly as a generic argument on the HKT's `type` member —
+ * nesting it inside a further object-type literal there is a TS2526 error.
+ * Modeled on `drizzle-orm/node-postgres/session.d.ts`'s
+ * `NodePgQueryResultHKT extends PgQueryResultHKT { type: QueryResult<Assume<this['row'], QueryResultRow>> }`.
+ */
+export interface PipesQueryResult<TRow = unknown> {
+	rows: TRow[];
+	rowCount: number;
+}
+
 export interface PipesQueryResultHKT extends PgQueryResultHKT {
-	type: Assume<this['row'], { [column: string]: any }>[];
+	type: PipesQueryResult<Assume<this['row'], { [column: string]: any }>>;
 }
 
 export class PipesPreparedQuery<T extends PreparedQueryConfig> extends PgPreparedQuery<T> {
@@ -96,8 +114,8 @@ export class PipesPreparedQuery<T extends PreparedQueryConfig> extends PgPrepare
 		const { fields, customResultMapper } = this;
 
 		if (!fields && !customResultMapper) {
-			const { rows } = await this.transport.query(this.queryString, params, 'execute');
-			return rows as T['execute'];
+			const { rows, affectedRows } = await this.transport.query(this.queryString, params, 'execute');
+			return { rows, rowCount: rows.length > 0 ? rows.length : affectedRows } as T['execute'];
 		}
 
 		const { rows } = await this.transport.query(this.queryString, params, 'all');

@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect } from '@jest/globals';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import { drizzle } from '../src/client/drizzle/index';
 
@@ -80,5 +80,35 @@ describe('drizzle() over pipes', () => {
 		expect(kinds).toEqual(['begin', 'query', 'commit']);
 		expect(fake.calls[1].sessionId).toBe('sid-1');
 		expect(fake.calls[2].sessionId).toBe('sid-1');
+	});
+
+	function makeMockDb(result: { rows: unknown[]; affected_rows: number }) {
+		return {
+			calls: [] as any[],
+			async query(this: { calls: any[] }, options: any) {
+				this.calls.push(options);
+				return result;
+			},
+			async beginTransaction() {
+				throw new Error('not used in these tests');
+			},
+			async commit() {},
+			async rollback() {},
+		};
+	}
+
+	it('exposes rowCount for writes without returning', async () => {
+		const fake = makeMockDb({ rows: [], affected_rows: 3 });
+		const db = drizzle({ client: fake as any, token: 'tok' });
+		const res = (await db.execute(sql.raw('update t set x = 1'))) as unknown as { rows: unknown[]; rowCount: number };
+		expect(res.rowCount).toBe(3);
+		expect(res.rows).toEqual([]);
+	});
+
+	it('rowCount equals row length for row-returning execute', async () => {
+		const fake = makeMockDb({ rows: [{ a: 1 }, { a: 2 }], affected_rows: 0 });
+		const db = drizzle({ client: fake as any, token: 'tok' });
+		const res = (await db.execute(sql.raw('select a from t'))) as unknown as { rows: unknown[]; rowCount: number };
+		expect(res.rowCount).toBe(2);
 	});
 });

@@ -63,7 +63,7 @@ function makeTransport(db: DatabaseLike, token: string, nodeId?: string, session
 			const res = method === 'all'
 				? await db.query({ ...options, rowMode: 'array' })
 				: await db.query(options);
-			return { rows: res.rows };
+			return { rows: res.rows, affectedRows: res.affected_rows ?? 0 };
 		},
 		async begin() {
 			return (await db.beginTransaction({ token, nodeId })).session_id;
