@@ -32,6 +32,8 @@
  */
 
 import { sql } from 'drizzle-orm';
+import type { Cache } from 'drizzle-orm/cache/core';
+import type { WithCacheConfig } from 'drizzle-orm/cache/core/types';
 import { entityKind } from 'drizzle-orm/entity';
 import { type Logger, NoopLogger } from 'drizzle-orm/logger';
 import { PgPreparedQuery, PgSession, PgTransaction } from 'drizzle-orm/pg-core';
@@ -47,6 +49,19 @@ import * as drizzleUtils from 'drizzle-orm/utils';
 const mapResultRow = (drizzleUtils as unknown as {
 	mapResultRow: <T>(columns: SelectedFieldsOrdered, row: unknown[], joinsNotNullableMap: Record<string, boolean> | undefined) => T;
 }).mapResultRow;
+
+/**
+ * `PgPreparedQuery.prototype.queryWithCache` is drizzle's cache-consultation
+ * wrapper (hash the query, check `cache.get`, run `query()` on a miss, then
+ * `cache.put`). It is real at runtime (`drizzle-orm/pg-core/session.js`, and
+ * every stock driver's `execute()` routes through it — see
+ * `node-postgres/session.js`) but marked `@internal` and stripped from the
+ * published `.d.ts`, so it is accessed the same way `mapResultRow` is above:
+ * a verified runtime export cast past its absent public typing.
+ */
+interface HasQueryWithCache {
+	queryWithCache<R>(queryString: string, params: unknown[], query: () => Promise<R>): Promise<R>;
+}
 
 /**
  * Transport contract between the Drizzle driver and the RocketRide SDK.
@@ -66,6 +81,8 @@ export interface PipesTransport {
 
 export interface PipesSessionOptions {
 	logger?: Logger;
+	/** Forwarded to every prepared query so `DrizzleConfig.cache` reaches drizzle's cache-consultation path. */
+	cache?: Cache;
 }
 
 /**
@@ -104,21 +121,27 @@ export class PipesPreparedQuery<T extends PreparedQueryConfig> extends PgPrepare
 		private fields: SelectedFieldsOrdered | undefined,
 		private _isResponseInArrayMode: boolean,
 		private customResultMapper?: (rows: unknown[][]) => T['execute'],
+		cache?: Cache,
+		queryMetadata?: { type: 'select' | 'update' | 'delete' | 'insert'; tables: string[] },
+		cacheConfig?: WithCacheConfig,
 	) {
-		super({ sql: queryString, params }, undefined, undefined);
+		super({ sql: queryString, params }, cache, queryMetadata, cacheConfig);
 	}
 
 	async execute(placeholderValues: Record<string, unknown> | undefined = {}): Promise<T['execute']> {
 		const params = fillPlaceholders(this.params, placeholderValues);
 		this.logger.logQuery(this.queryString, params);
 		const { fields, customResultMapper } = this;
+		const withCache = this as unknown as HasQueryWithCache;
 
 		if (!fields && !customResultMapper) {
-			const { rows, affectedRows } = await this.transport.query(this.queryString, params, 'execute');
+			const { rows, affectedRows } = await withCache.queryWithCache(this.queryString, params, () =>
+				this.transport.query(this.queryString, params, 'execute'));
 			return { rows, rowCount: rows.length > 0 ? rows.length : affectedRows } as T['execute'];
 		}
 
-		const { rows } = await this.transport.query(this.queryString, params, 'all');
+		const { rows } = await withCache.queryWithCache(this.queryString, params, () =>
+			this.transport.query(this.queryString, params, 'all'));
 		return customResultMapper
 			? customResultMapper(rows as unknown[][])
 			: (rows as unknown[][]).map((row) => mapResultRow<T['execute']>(fields!, row, this.joinsNotNullableMap));
@@ -156,8 +179,21 @@ export class PipesSession<
 		name: string | undefined,
 		isResponseInArrayMode: boolean,
 		customResultMapper?: (rows: unknown[][]) => T['execute'],
+		queryMetadata?: { type: 'select' | 'update' | 'delete' | 'insert'; tables: string[] },
+		cacheConfig?: WithCacheConfig,
 	): PipesPreparedQuery<T> {
-		return new PipesPreparedQuery(this.transport, query.sql, query.params, this.logger, fields, isResponseInArrayMode, customResultMapper);
+		return new PipesPreparedQuery(
+			this.transport,
+			query.sql,
+			query.params,
+			this.logger,
+			fields,
+			isResponseInArrayMode,
+			customResultMapper,
+			this.options.cache,
+			queryMetadata,
+			cacheConfig,
+		);
 	}
 
 	override async transaction<T>(

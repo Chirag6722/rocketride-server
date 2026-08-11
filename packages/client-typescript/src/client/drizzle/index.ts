@@ -120,6 +120,6 @@ export function drizzle<TSchema extends Record<string, unknown> = Record<string,
 	}
 
 	const transport = makeTransport(client, token, nodeId);
-	const session = new PipesSession(transport, dialect, schema, { logger });
+	const session = new PipesSession(transport, dialect, schema, { logger, cache: config.cache });
 	return new PgDatabase(dialect, session, schema) as RocketRideDrizzle<TSchema>;
 }

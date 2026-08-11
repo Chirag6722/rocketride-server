@@ -24,6 +24,7 @@
 
 import { describe, it, expect } from '@jest/globals';
 import { eq, sql } from 'drizzle-orm';
+import type { Cache } from 'drizzle-orm/cache/core';
 import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import { drizzle } from '../src/client/drizzle/index';
 
@@ -110,5 +111,37 @@ describe('drizzle() over pipes', () => {
 		const db = drizzle({ client: fake as any, token: 'tok' });
 		const res = (await db.execute(sql.raw('select a from t'))) as unknown as { rows: unknown[]; rowCount: number };
 		expect(res.rowCount).toBe(2);
+	});
+
+	/** A minimal in-memory `Cache` (drizzle-orm's `cache/core` contract) that records every `get`/`put` call. */
+	function makeFakeCache() {
+		const store = new Map<string, unknown>();
+		const calls = { get: [] as unknown[], put: [] as unknown[] };
+		const cache = {
+			strategy: () => 'all' as const,
+			async get(key: string, tables: string[], isTag: boolean, isAutoInvalidate?: boolean) {
+				calls.get.push({ key, tables, isTag, isAutoInvalidate });
+				return store.get(key);
+			},
+			async put(key: string, response: unknown, tables: string[], isTag: boolean) {
+				calls.put.push({ key, response, tables, isTag });
+				store.set(key, response);
+			},
+			async onMutate() {},
+		};
+		return { cache: cache as unknown as Cache, calls };
+	}
+
+	it('propagates DrizzleConfig.cache so repeated selects are served from the cache', async () => {
+		const fake = makeFakeDatabaseLike();
+		const { cache, calls } = makeFakeCache();
+		const db = drizzle({ client: fake as any, token: 'tok', cache });
+
+		await db.select().from(users).where(eq(users.id, 1));
+		await db.select().from(users).where(eq(users.id, 1));
+
+		expect(calls.get.length).toBe(2);
+		expect(calls.put.length).toBe(1);
+		expect(fake.calls.filter((c: any) => c.kind === 'query').length).toBe(1);
 	});
 });

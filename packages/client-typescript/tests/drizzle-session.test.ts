@@ -156,11 +156,20 @@ describe('PipesSession', () => {
 		});
 		const dialect = new PgDialect();
 		const session = new PipesSession(transport, dialect, undefined);
-		await expect(
-			session.transaction(async (tx) => {
+		// Query failures now route through drizzle's `queryWithCache` (needed so
+		// cache.get/put are consulted — see the cache-propagation tests), which
+		// wraps the original error in a `DrizzleQueryError` and preserves it as
+		// `.cause`. Assert on the cause so this still proves the *query* error
+		// (not the rollback error) is what reaches the caller.
+		let thrown: unknown;
+		try {
+			await session.transaction(async (tx) => {
 				await tx.execute(sql.raw('insert into t values (1)'));
-			})
-		).rejects.toThrow('duplicate key');
+			});
+		} catch (err) {
+			thrown = err;
+		}
+		expect((thrown as { cause?: unknown } | undefined)?.cause).toBe(original);
 	});
 
 	it('surfaces the inner error when rollback-to-savepoint fails', async () => {
