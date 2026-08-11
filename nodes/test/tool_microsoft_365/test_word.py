@@ -71,7 +71,7 @@ for _name in ('depends', 'rocketlib', 'ai', 'ai.common', 'ai.common.config'):
             _stub.IGlobalBase = object
             _stub.OPEN_MODE = types.SimpleNamespace(CONFIG='CONFIG')
             _stub.warning = lambda *a, **k: None
-            _stub.tool_function = lambda **kw: (lambda f: f)
+            _stub.tool_function = lambda **kw: lambda f: f
         if _name == 'ai.common.config':
             _stub.Config = object
         sys.modules[_name] = _stub
