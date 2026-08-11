@@ -34,7 +34,7 @@ SERVICES = sorted(ROOT.glob('services.*.json'))
 
 
 def _load(p):
-    return json.loads(re.sub(r'^\s*//.*$', '', p.read_text(), flags=re.M))
+    return json.loads(re.sub(r'^\s*//.*$', '', p.read_text(encoding='utf-8'), flags=re.M))
 
 
 def test_services_exist():
