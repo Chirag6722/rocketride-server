@@ -96,20 +96,28 @@ def message_body(
 
 _TAG_RE = _re.compile(r'<[^>]+>')
 _BLOCK_BREAK_RE = _re.compile(r'</(?:p|div|li|tr|h[1-6])\s*>|<br\s*/?>', _re.IGNORECASE)
+# Outlook HTML bodies routinely embed a large <style> block (mso-* CSS) in
+# <head>, and occasionally <script>; both must be dropped *with their
+# contents* before tag-stripping, or their raw text leaks into the readable
+# body (tag-stripping alone only removes the <style>/<script> tags, not what's
+# between them).
+_STYLE_SCRIPT_RE = _re.compile(r'<(style|script)\b[^>]*>.*?</\1\s*>', _re.IGNORECASE | _re.DOTALL)
 
 
 def html_to_text(content: str) -> str:
     """Pragmatically convert an HTML message body to readable plain text.
 
-    Not a full HTML parser (no extra dependency pulled in for it): block-level
-    closing tags and ``<br>`` become newlines, remaining tags are stripped,
-    entities are unescaped, and blank-line runs are collapsed. Good enough to
-    surface a readable body from Graph's ``body.content`` when
-    ``body.contentType`` is ``html``.
+    Not a full HTML parser (no extra dependency pulled in for it): entire
+    ``<style>``/``<script>`` elements (tag and contents) are dropped first,
+    then block-level closing tags and ``<br>`` become newlines, remaining
+    tags are stripped, entities are unescaped, and blank-line runs are
+    collapsed. Good enough to surface a readable body from Graph's
+    ``body.content`` when ``body.contentType`` is ``html``.
     """
     if not content:
         return ''
-    text = _BLOCK_BREAK_RE.sub('\n', content)
+    text = _STYLE_SCRIPT_RE.sub('', content)
+    text = _BLOCK_BREAK_RE.sub('\n', text)
     text = _TAG_RE.sub('', text)
     text = _html.unescape(text)
     out_lines: list[str] = []

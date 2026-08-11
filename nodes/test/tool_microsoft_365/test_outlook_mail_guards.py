@@ -239,3 +239,53 @@ class TestToolLevelGuards:
 
     def test_no_stray_client_helpers_left_behind(self):
         assert not hasattr(omc, 'is_org_wide_alias')
+
+
+class TestHtmlToTextStripsStyleAndScript:
+    """Real Outlook HTML embeds a big <style> block (mso-* CSS) in <head>, and
+    sometimes <script>; tag-stripping alone leaves their *contents* behind, so
+    html_to_text must drop the whole element before stripping tags.
+    """
+
+    _HTML = """
+        <html>
+        <head>
+        <style>
+        body { font-family: Calibri; }
+        p.MsoNormal, li.MsoNormal { margin: 0in; mso-style-priority: 99; }
+        @media screen { .foo { color: red; } }
+        </style>
+        <script type="text/javascript">
+        var trackingId = "abc123"; document.write(trackingId);
+        </script>
+        </head>
+        <body>
+        <p class="MsoNormal">Hi Alex,</p>
+        <p class="MsoNormal">See the attached report.</p>
+        <p class="MsoNormal">Thanks,<br>Dylan</p>
+        </body>
+        </html>
+    """
+
+    def test_style_and_script_contents_do_not_leak(self):
+        text = omc.html_to_text(self._HTML)
+        assert 'mso-style-priority' not in text
+        assert 'font-family' not in text
+        assert '.foo { color: red; }' not in text
+        assert 'trackingId' not in text
+        assert 'document.write' not in text
+
+    def test_real_body_text_survives(self):
+        text = omc.html_to_text(self._HTML)
+        assert 'Hi Alex,' in text
+        assert 'See the attached report.' in text
+        assert 'Thanks,' in text
+        assert 'Dylan' in text
+
+    def test_case_insensitive_and_attributed_tags(self):
+        html = '<P>keep</P><STYLE type="text/css">.x{color:red}</STYLE><SCRIPT>evil()</SCRIPT><p>me</p>'
+        text = omc.html_to_text(html)
+        assert 'color:red' not in text
+        assert 'evil()' not in text
+        assert 'keep' in text
+        assert 'me' in text

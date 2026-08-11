@@ -49,6 +49,9 @@ invoke-time parameters — never node config.
 
 from __future__ import annotations
 
+import base64
+import binascii
+
 from rocketlib import tool_function
 
 from ai.common.utils import (
@@ -569,6 +572,10 @@ class IInstance(MicrosoftToolInstanceBase):
         message_id = require_str(args, 'message_id', tool_name='outlook_mail_add_attachment')
         name = require_str(args, 'name', tool_name='outlook_mail_add_attachment')
         content_b64 = require_str(args, 'content_base64', tool_name='outlook_mail_add_attachment')
+        try:
+            base64.b64decode(content_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f'outlook_mail_add_attachment: "content_base64" is not valid base64 ({exc})') from exc
         data = request(
             self.IGlobal.auth,
             'POST',
