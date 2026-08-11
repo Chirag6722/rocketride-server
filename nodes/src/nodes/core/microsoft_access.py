@@ -56,8 +56,7 @@ class AccessSpec:
             )
         if self.default not in self.scopes:
             raise MicrosoftAccessError(
-                f'AccessSpec default tier {self.default!r} is not a defined tier; '
-                f'expected one of {sorted(self.scopes)}'
+                f'AccessSpec default tier {self.default!r} is not a defined tier; expected one of {sorted(self.scopes)}'
             )
 
 
@@ -82,8 +81,7 @@ class MicrosoftAccess:
         """Raise if the named destructive gate is not enabled."""
         if not self.flags.get(name, False):
             raise MicrosoftAccessError(
-                f'{op} is gated by {name!r}, which is off by default. '
-                f'Enable {name!r} in the node config to allow it.'
+                f'{op} is gated by {name!r}, which is off by default. Enable {name!r} in the node config to allow it.'
             )
 
 
@@ -129,9 +127,7 @@ def _resolve_flags(config: dict, spec: AccessSpec) -> dict[str, bool]:
             continue
         value = config[name]
         if type(value) is not bool:
-            raise MicrosoftAccessError(
-                f'flag {name!r} must be a boolean, got {value!r} ({type(value).__name__})'
-            )
+            raise MicrosoftAccessError(f'flag {name!r} must be a boolean, got {value!r} ({type(value).__name__})')
         flags[name] = value
     return flags
 

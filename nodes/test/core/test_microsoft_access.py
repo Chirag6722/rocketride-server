@@ -32,9 +32,7 @@ import pytest
 
 # core/ is a flat dir of engine-loaded modules (no __init__.py) and nodes/src is
 # not on pytest's pythonpath, so import the module by adding its dir to sys.path.
-sys.path.insert(
-    0, str(Path(__file__).resolve().parents[2] / 'src' / 'nodes' / 'core')
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src' / 'nodes' / 'core'))
 from microsoft_access import (  # noqa: E402
     EXCEL,
     ONEDRIVE,
