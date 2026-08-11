@@ -31,11 +31,11 @@ async def test_list_tools_order_is_deterministic_and_pinned(fake_engine):
         names_1 = [t.name for t in (await client.list_tools()).tools]
         names_2 = [t.name for t in (await client.list_tools()).tools]
     assert names_1 == names_2
-    assert names_1[:4] == ['list_components', 'describe_component', 'validate_pipeline', 'describe_pipeline']
-    assert names_1[-4:] == ['log_chapters', 'log_read', 'log_traces', 'log_trace']
     from .conftest import EXPECTED_TOOL_NAMES
 
-    assert len(names_1) == len(EXPECTED_TOOL_NAMES)
+    # Full ordered pin — a reordering anywhere in the list must fail, not
+    # just at the first/last few names.
+    assert names_1 == list(EXPECTED_TOOL_NAMES)
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,9 @@
 
 import asyncio
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
+
+from ..errors import _timeout
 
 try:
     import json5
@@ -54,3 +56,19 @@ async def load_pipeline_async(args: Dict[str, Any]) -> Dict[str, Any]:
     the in-process ASGI server for the duration of the read.
     """
     return await asyncio.to_thread(load_pipeline, args)
+
+
+DEFAULT_TIMEOUT_SECONDS = 30
+
+
+async def engine_call(coro: Any, tool_name: str) -> Tuple[Any, Optional[dict]]:
+    """Await ``coro`` under the standard seam timeout.
+
+    Returns ``(result, None)`` or ``(None, timeout_envelope)`` — one
+    wait_for + in-band Timeout contract shared by every tool group, so no
+    seam call can hold a tool call open unbounded.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=DEFAULT_TIMEOUT_SECONDS), None
+    except asyncio.TimeoutError:
+        return None, _timeout(f'{tool_name} timed out waiting for the engine', f'retry {tool_name}')

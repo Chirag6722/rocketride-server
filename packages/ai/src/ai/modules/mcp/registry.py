@@ -11,9 +11,16 @@ event loops or accessed concurrently from multiple threads.
 
 from typing import Any, Dict, List, Optional
 
+# Bound on registry size: entries leak when cleanup paths are skipped (a
+# failed terminate, a client that stops mid-run and never polls monitor to
+# a terminal state). The registry is advisory metadata — evicting the oldest
+# entry never invalidates the engine-side task, it only drops bookkeeping —
+# so a simple FIFO cap keeps a long-lived process bounded.
+MAX_TASKS = 512
+
 
 class TaskRegistry:
-    """In-memory ``{token -> metadata}`` registry.
+    """In-memory ``{token -> metadata}`` registry, FIFO-bounded at ``MAX_TASKS``.
 
     Single-event-loop use only; not thread-safe.
     """
@@ -22,7 +29,14 @@ class TaskRegistry:
         self._tasks: Dict[str, Dict[str, Any]] = {}
 
     def add(self, token: str, **metadata: Any) -> None:
-        """Register ``token`` with the given metadata, replacing any prior entry."""
+        """Register ``token`` with the given metadata, replacing any prior entry.
+
+        At ``MAX_TASKS`` entries the oldest is evicted (dict preserves
+        insertion order) so leaked tokens can't grow the process forever.
+        """
+        self._tasks.pop(token, None)  # re-add moves the token to newest
+        while len(self._tasks) >= MAX_TASKS:
+            self._tasks.pop(next(iter(self._tasks)))
         self._tasks[token] = dict(metadata)
 
     def remove(self, token: str) -> None:

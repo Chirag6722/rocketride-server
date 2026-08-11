@@ -36,3 +36,23 @@ async def test_webserver_use_mcp_does_not_raise_and_mounts_route(monkeypatch, fa
 
     paths = {getattr(r, 'path', None) for r in server.app.routes}
     assert any(p and p.startswith('/mcp') for p in paths)
+
+
+@pytest.mark.asyncio
+async def test_webserver_use_mcp_default_mounts_authenticated(monkeypatch, fake_engine):
+    """The production default (no dev bypass) must also mount /mcp — and must
+    NOT mark it public, so AuthMiddleware keeps protecting it.
+    """
+    pytest.importorskip('rocketlib')  # WebServer needs the engine env
+    from ai.web.server import WebServer
+    import ai.modules.mcp as mcp_module
+
+    monkeypatch.setattr(mcp_module, 'make_engine_client', lambda cfg, on_event=None: fake_engine)
+
+    server = WebServer()
+    server.use('mcp', {})
+
+    paths = {getattr(r, 'path', None) for r in server.app.routes}
+    assert any(p and p.startswith('/mcp') for p in paths)
+    public = list(getattr(server, '_public_paths', []) or [])
+    assert '/mcp' not in public

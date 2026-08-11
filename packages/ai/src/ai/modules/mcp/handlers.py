@@ -135,6 +135,10 @@ def build_mcp_server(
         return types.CallToolResult(
             content=[types.TextContent(type='text', text=text)],
             structured_content=json.loads(text),
+            # Derived from the in-band contract: hosts can detect a failed
+            # call without parsing the body, while the envelope still carries
+            # the message/hint the agent self-corrects from.
+            is_error=not result.get('ok', False),
         )
 
     async def _on_list_resources(ctx, params: types.PaginatedRequestParams | None) -> types.ListResourcesResult:

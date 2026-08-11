@@ -23,11 +23,14 @@ def _reset_store_singleton():
     """
     try:
         from ai.account.store import Store
-    except ImportError:
+    except ImportError as exc:
         # ai.account needs engine-env modules (rocketlib). In a plain venv
         # (e.g. running the mcp module tests directly) the import fails —
         # and nothing could have built the singleton there, so there is
-        # nothing to reset.
+        # nothing to reset. Any OTHER import failure is a real breakage and
+        # must not be silenced into order-dependent tests.
+        if (exc.name or '').split('.')[0] != 'rocketlib':
+            raise
         yield
         return
 

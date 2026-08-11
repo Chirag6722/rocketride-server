@@ -52,8 +52,9 @@ async def test_call_tool_unknown_name_returns_error_result_not_crash(fake_engine
     async with Client(server) as client:
         result = await client.call_tool('nope', {})
 
-    # A structured, self-correctable result -- not a crash, not an MCP tool error.
-    assert result.is_error is False
+    # A structured, self-correctable result -- not a crash. is_error mirrors
+    # the in-band ok flag so hosts see the failure without parsing the body.
+    assert result.is_error is True
     payload = json.loads(result.content[0].text)
     assert payload['ok'] is False
     assert payload['error_type'] == 'UnknownTool'
@@ -239,7 +240,8 @@ async def test_call_tool_soft_error_returns_normalized_result(fake_engine):
     async with Client(server) as client:
         result = await client.call_tool('soft', {})
 
-    assert result.is_error is False
+    # is_error mirrors ok: the envelope still rides content for self-correction.
+    assert result.is_error is True
     payload = json.loads(result.content[0].text)
     assert payload['ok'] is False
     assert payload['error_type'] == 'RuntimeError'

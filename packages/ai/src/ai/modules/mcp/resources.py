@@ -42,5 +42,6 @@ async def read_resource(engine: EngineClient, uri: str) -> str:
     if uri == STATUS_URI:
         tasks = await engine.list_tasks()
         names = [t.get('name') for t in tasks if t.get('name')]
-        return json.dumps({'connected': True, 'pipeline_count': len(names), 'pipelines': names})
+        # Count ALL running tasks; `pipelines` lists only the resolvable names.
+        return json.dumps({'connected': True, 'pipeline_count': len(tasks), 'pipelines': names})
     raise ValueError(f'Unknown resource: {uri}')

@@ -256,3 +256,24 @@ async def test_describe_pipeline_skips_lookup_when_provider_absent(fake_engine):
     assert result['ok'] is True
     assert result['components'] == [{'id': 'c1', 'provider': None, 'title': None, 'classType': None, 'inputs': []}]
     assert fake_engine.get_service_calls == []
+
+
+@pytest.mark.asyncio
+async def test_describe_pipeline_caches_unknown_provider_lookup(fake_engine):
+    """Negative lookups are cached too: two components with the same
+    unresolvable provider must cost exactly one seam call.
+    """
+    registry = ToolRegistry()
+    introspection.register(registry)
+    pipeline = {
+        'source': 'my-pipe',
+        'components': [
+            {'id': 'c1', 'provider': 'nope', 'input': []},
+            {'id': 'c2', 'provider': 'nope', 'input': ['c1']},
+        ],
+    }
+
+    result = await registry.handler('describe_pipeline')(fake_engine, None, {'pipeline': pipeline})
+
+    assert len(result['components']) == 2
+    assert fake_engine.get_service_calls == ['nope']

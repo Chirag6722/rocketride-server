@@ -41,10 +41,8 @@ async def test_build_mcp_server_lists_tools_from_real_registry(fake_engine):
         from .conftest import EXPECTED_TOOL_NAMES
 
         names = [t.name for t in result.tools]
-        assert set(names) == set(EXPECTED_TOOL_NAMES)
-        # Order pin (see also test_cache_policy.py::test_list_tools_order_is_deterministic_and_pinned).
-        assert names[0] == 'list_components'
-        assert names[-1] == 'log_trace'
+        # Count + full set + order in one ordered comparison.
+        assert names == list(EXPECTED_TOOL_NAMES)
 
         call_result = await client.call_tool('list_running_pipelines', {})
         assert call_result.is_error is False

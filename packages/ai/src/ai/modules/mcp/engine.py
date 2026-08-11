@@ -81,6 +81,7 @@ class EngineClient(Protocol):
     async def log_trace(
         self, project_id: str, source: str, run_kind: str = 'dev', *, begin_seq: int = 0
     ) -> Dict[str, Any]: ...
+    async def close(self) -> None: ...
 
 
 class WsEngineClient:

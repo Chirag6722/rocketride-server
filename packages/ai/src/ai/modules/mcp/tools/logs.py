@@ -52,6 +52,16 @@ async def _log_chapters(client, tasks, args: Dict[str, Any]) -> dict:
         )
     except asyncio.TimeoutError:
         return _timeout('log_chapters timed out waiting for the engine', 'retry log_chapters')
+    except LogNotFound:
+        # Same envelope as the empty-chapters case below: one shape for
+        # "this run log doesn't exist", whether the seam signals it with an
+        # exception or an empty list.
+        return {
+            'ok': False,
+            'error_type': 'NotFound',
+            'message': 'no recorded runs for this projectId/source',
+            'hint': _ADDRESSING_HINT,
+        }
     chapters = (result or {}).get('chapters') or []
     if not chapters:
         return {
@@ -92,6 +102,13 @@ async def _log_read(client, tasks, args: Dict[str, Any]) -> dict:
             'log_read timed out waiting for the engine',
             'retry log_read, optionally with a smaller maxEvents',
         )
+    except LogNotFound:
+        return {
+            'ok': False,
+            'error_type': 'NotFound',
+            'message': 'no run log for this projectId/source, or it expired',
+            'hint': _RETENTION_HINT,
+        }
     result = result or {}
     return {
         'ok': True,

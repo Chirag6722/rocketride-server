@@ -20,6 +20,17 @@ def test_register_adds_four_log_tools():
     assert set(_registry().names()) == {'log_chapters', 'log_read', 'log_traces', 'log_trace'}
 
 
+def test_register_binds_each_name_to_its_handler():
+    """The behavior tests below call the private handlers directly, so this
+    pins the name-to-handler wiring a mis-wired register() would break.
+    """
+    registry = _registry()
+    assert registry.handler('log_chapters') is logs._log_chapters
+    assert registry.handler('log_read') is logs._log_read
+    assert registry.handler('log_traces') is logs._log_traces
+    assert registry.handler('log_trace') is logs._log_trace
+
+
 @pytest.mark.asyncio
 async def test_log_chapters_happy_path(fake_engine):
     fake_engine.log_chapters_result = {

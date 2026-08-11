@@ -7,7 +7,7 @@ alongside `services`, `chat`, `dropper`, `clients`, `task`, `task_http`, and `sh
 (see `server.use('mcp')` in `packages/ai/src/ai/eaas.py`). It is fronted by `ai/web/`
 like every other module and mounted at:
 
-```
+```text
 /mcp
 ```
 
@@ -228,8 +228,7 @@ are normalized via `errors.normalize_error`: self-correctable failures come back
 an in-band `{ok: False, error_type, message, hint}` result; hard failures
 (`errors.HardError`, or a raw exception whose type name is in `errors.HARD_EXC_NAMES`
 — `ConnectionError`, `AuthenticationException`, `TimeoutError`) propagate out of the
-handler and surface as a genuine MCP tool error (`CallToolResult(isError=True)`), not
-a structured result.
+handler and surface as a genuine MCP tool error, not a structured result. Structured `{ok: False}` envelopes additionally set `isError=true` on the `CallToolResult` (derived from the in-band `ok` field) so hosts can detect a failed call without parsing the JSON body — the envelope itself still rides `content`/`structuredContent` for the agent to self-correct from.
 
 ## Resources (2)
 

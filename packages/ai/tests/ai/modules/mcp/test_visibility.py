@@ -9,6 +9,7 @@ poll loop never actually waits in the test suite.
 """
 
 import asyncio
+import itertools
 
 import pytest
 
@@ -149,8 +150,11 @@ async def test_monitor_always_running_returns_non_terminal_snapshot_at_timeout(f
     _no_sleep(monkeypatch)
     fake_engine._task_statuses = [{'state': 3, 'completed': False}]
 
-    clock = iter([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
-    monkeypatch.setattr('time.monotonic', lambda: next(clock, 999.0))
+    # A deterministic counter, not a finite iterator: the event loop and
+    # pytest internals also read time.monotonic during the test, and a
+    # finite clock would make the outcome depend on who reads it first.
+    ticks = itertools.count(start=0.0, step=0.5)
+    monkeypatch.setattr('time.monotonic', lambda: next(ticks))
 
     registry = ToolRegistry()
     visibility.register(registry)

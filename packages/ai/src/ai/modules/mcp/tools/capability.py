@@ -5,28 +5,12 @@ deployments (`deploy_add`, `deploy_list`, `deploy_status`, `deploy_remove`,
 `deploy_update`).
 """
 
-import asyncio
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict
 
 from ..errors import _bad
-from ..errors import _timeout
 from ..tooling import ToolRegistry
+from ._common import engine_call as _engine_call
 from ._common import load_pipeline_async
-
-DEFAULT_TIMEOUT_SECONDS = 30
-
-
-async def _engine_call(coro: Any, tool_name: str) -> Tuple[Any, Optional[dict]]:
-    """Await ``coro`` under the standard seam timeout.
-
-    Returns ``(result, None)`` or ``(None, timeout_envelope)`` — the same
-    wait_for + in-band Timeout contract the execution/logs/visibility tools
-    use, so no store/deploy call can hold a tool call open unbounded.
-    """
-    try:
-        return await asyncio.wait_for(coro, timeout=DEFAULT_TIMEOUT_SECONDS), None
-    except asyncio.TimeoutError:
-        return None, _timeout(f'{tool_name} timed out waiting for the engine', f'retry {tool_name}')
 
 
 _PIPELINE_OR_FILEPATH_SCHEMA_PROPS = {
@@ -195,6 +179,9 @@ async def _deploy_add(client, tasks, args: Dict[str, Any]) -> dict:
     pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
     deployment, err = await _engine_call(client.deploy_add(pipeline, schedule=args.get('schedule')), 'deploy_add')
     if err:
+        # Non-idempotent create: the engine may have registered the deployment
+        # before the local budget elapsed — a blind retry would duplicate it.
+        err['hint'] = 'the deployment may already exist; call deploy_list before retrying deploy_add'
         return err
     return {'ok': True, 'deployment': deployment}
 

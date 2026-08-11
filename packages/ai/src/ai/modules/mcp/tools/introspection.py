@@ -13,6 +13,7 @@ from typing import Any, Dict
 
 from ..errors import _bad
 from ..tooling import ToolRegistry
+from ._common import engine_call
 from ._common import load_pipeline_async
 
 _PIPELINE_OR_FILEPATH_SCHEMA = {
@@ -26,7 +27,9 @@ _PIPELINE_OR_FILEPATH_SCHEMA = {
 
 
 async def _list_components(client, tasks, args: Dict[str, Any]) -> dict:
-    services = await client.get_services()
+    services, err = await engine_call(client.get_services(), 'list_components')
+    if err:
+        return err
     definitions = (services or {}).get('services') or {}
     components = [
         {
@@ -47,7 +50,9 @@ async def _describe_component(client, tasks, args: Dict[str, Any]) -> dict:
     if not name:
         return _bad('name is required', 'pick a name from list_components')
 
-    service = await client.get_service(name)
+    service, err = await engine_call(client.get_service(name), 'describe_component')
+    if err:
+        return err
     if service is None:
         return _bad(f'Unknown component: {name}', 'call list_components for valid names')
 
@@ -56,7 +61,10 @@ async def _describe_component(client, tasks, args: Dict[str, Any]) -> dict:
 
 async def _validate_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
     pipeline = await load_pipeline_async(args)  # raises ValueError -> normalized by the dispatch layer
-    result = (await client.validate(pipeline)) or {}
+    validated, err = await engine_call(client.validate(pipeline), 'validate_pipeline')
+    if err:
+        return err
+    result = validated or {}
     errors = result.get('errors') or []
     warnings = result.get('warnings') or []
     return {'ok': not errors, 'errors': errors, 'warnings': warnings}
@@ -77,7 +85,8 @@ async def _describe_pipeline(client, tasks, args: Dict[str, Any]) -> dict:
         if provider is not None:
             if provider not in service_cache:
                 try:
-                    service_cache[provider] = await client.get_service(provider)
+                    resolved, _timeout_err = await engine_call(client.get_service(provider), 'describe_pipeline')
+                    service_cache[provider] = resolved  # a timed-out lookup caches as None
                 except Exception:  # noqa: BLE001 - unknown/broken provider must not abort the parse
                     service_cache[provider] = None
             service = service_cache[provider]

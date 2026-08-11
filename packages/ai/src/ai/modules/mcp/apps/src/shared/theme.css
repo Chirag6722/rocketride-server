@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Aparavi Software AG
  * See LICENSE file for details.
  *
- * Shared widget design-system. Neutrals are host-adaptive (currentColor
+ * Shared widget design-system. Neutrals are host-adaptive (currentcolor
  * mixes over the host's light/dark scheme); RocketRide identity lives in
  * the accents: Horizon Blue #41b6e6 for interaction, the logo's flame
  * #F93822 for upload/drag "energy" moments. Palette source:
@@ -14,10 +14,10 @@
 	--rr-accent: #41b6e6;
 	--rr-flame: #f93822;
 	--rr-flame-soft: #ff7a52;
-	--rr-line: color-mix(in srgb, currentColor 14%, transparent);
-	--rr-line-strong: color-mix(in srgb, currentColor 26%, transparent);
-	--rr-surface: color-mix(in srgb, currentColor 4%, transparent);
-	--rr-inset: color-mix(in srgb, currentColor 7%, transparent);
+	--rr-line: color-mix(in srgb, currentcolor 14%, transparent);
+	--rr-line-strong: color-mix(in srgb, currentcolor 26%, transparent);
+	--rr-surface: color-mix(in srgb, currentcolor 4%, transparent);
+	--rr-inset: color-mix(in srgb, currentcolor 7%, transparent);
 	--rr-accent-tint: color-mix(in srgb, var(--rr-accent) 16%, transparent);
 	--rr-flame-tint: color-mix(in srgb, var(--rr-flame) 12%, transparent);
 }
@@ -68,7 +68,8 @@ body {
 .result-object pre,
 .rr-card pre {
 	white-space: pre-wrap;
-	word-break: break-word;
+	word-break: normal;
+	overflow-wrap: break-word;
 	margin: 6px 0 0;
 	padding: 8px 10px;
 	max-height: 320px;

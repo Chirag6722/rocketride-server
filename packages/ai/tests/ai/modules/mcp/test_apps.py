@@ -121,6 +121,7 @@ def test_ui_resource_csp_stamped_when_origin_known(apps_dir, monkeypatch):
 
 def test_ui_resource_no_csp_without_origin_or_flag(apps_dir):
     listed = apps.list_ui_resources(apps_dir)
+    assert listed  # an empty list would vacuously pass the CSP check below
     assert all(r.meta is None for r in listed)
 
 
