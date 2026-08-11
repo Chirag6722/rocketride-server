@@ -73,6 +73,49 @@ function makeDb(rowsFor: (sqlText: string) => unknown[]) {
 	return { session, dialect, calls, events };
 }
 
+/**
+ * A transport whose `query` throws for statements matched by `shouldFail`,
+ * and whose `rollback` optionally throws too. Used to exercise the client's
+ * compensating-rollback failure paths without disturbing the happy-path
+ * `makeFakeTransport` helper above.
+ */
+function makeFaultyTransport(opts: {
+	shouldFail?: (sqlText: string) => Error | undefined;
+	rollbackError?: Error;
+}) {
+	const calls: Call[] = [];
+	const events: string[] = [];
+	let nextSession = 0;
+	const make = (sessionId?: string): PipesTransport => ({
+		async query(sqlText, params, method) {
+			calls.push({ sql: sqlText, params, method, sessionId });
+			const err = opts.shouldFail?.(sqlText);
+			if (err) {
+				throw err;
+			}
+			return { rows: [] };
+		},
+		async begin() {
+			const sid = `sid-${++nextSession}`;
+			events.push(`begin:${sid}`);
+			return sid;
+		},
+		async commit(sid) {
+			events.push(`commit:${sid}`);
+		},
+		async rollback(sid) {
+			events.push(`rollback:${sid}`);
+			if (opts.rollbackError) {
+				throw opts.rollbackError;
+			}
+		},
+		withSession(sid) {
+			return make(sid);
+		},
+	});
+	return { transport: make(), calls, events };
+}
+
 describe('PipesSession', () => {
 	it('runs selects in array mode and maps rows to objects', async () => {
 		const { session, dialect, calls } = makeDb(() => [[1, 'ada']]);
@@ -103,6 +146,42 @@ describe('PipesSession', () => {
 			})
 		).rejects.toThrow('boom');
 		expect(events).toEqual(['begin:sid-1', 'rollback:sid-1']);
+	});
+
+	it('surfaces the original error when rollback also fails', async () => {
+		const original = new Error('duplicate key value violates unique constraint');
+		const { transport } = makeFaultyTransport({
+			shouldFail: () => original,
+			rollbackError: new Error('unknown or expired transaction session: x'),
+		});
+		const dialect = new PgDialect();
+		const session = new PipesSession(transport, dialect, undefined);
+		await expect(
+			session.transaction(async (tx) => {
+				await tx.execute(sql.raw('insert into t values (1)'));
+			})
+		).rejects.toThrow('duplicate key');
+	});
+
+	it('surfaces the inner error when rollback-to-savepoint fails', async () => {
+		// nested tx: inner callback rejects AND the savepoint rollback statement
+		// rejects too -> the caller must still receive the inner error, not the
+		// savepoint-rollback failure.
+		const savepointError = new Error('unknown or expired transaction session: x');
+		const { transport, events } = makeFaultyTransport({
+			shouldFail: (sqlText) => (sqlText.toLowerCase().includes('rollback to savepoint') ? savepointError : undefined),
+		});
+		const dialect = new PgDialect();
+		const session = new PipesSession(transport, dialect, undefined);
+		await session.transaction(async (tx) => {
+			await expect(
+				tx.transaction(async (tx2) => {
+					await tx2.insert(users).values({ id: 2, name: 'bob' });
+					throw new Error('inner');
+				})
+			).rejects.toThrow('inner');
+		});
+		expect(events).toEqual(['begin:sid-1', 'commit:sid-1']);
 	});
 
 	it('applies transaction config via SET TRANSACTION', async () => {

@@ -157,7 +157,12 @@ export class PipesSession<
 			await this.transport.commit(sessionId);
 			return result;
 		} catch (err) {
-			await this.transport.rollback(sessionId);
+			try {
+				await this.transport.rollback(sessionId);
+			} catch {
+				// Best-effort: the server may have already discarded the session
+				// (idle-reaped, transport down). The original error is the story.
+			}
 			throw err;
 		}
 	}
@@ -183,7 +188,13 @@ export class PipesTransaction<
 			await tx.execute(sql.raw(`release savepoint ${savepointName}`));
 			return result;
 		} catch (err) {
-			await tx.execute(sql.raw(`rollback to savepoint ${savepointName}`));
+			try {
+				await tx.execute(sql.raw(`rollback to savepoint ${savepointName}`));
+			} catch {
+				// If recovery is impossible the session itself is gone and the
+				// outer transaction's rollback/commit will surface that; keep
+				// the inner statement's error as the cause.
+			}
 			throw err;
 		}
 	}
