@@ -166,6 +166,17 @@ def _build_docx_bytes(*, paragraph_text='hello world', cell_text='foo bar') -> b
     return buf.getvalue()
 
 
+def _docx_bytes_from(build) -> bytes:
+    """Build a docx via a ``build(doc)`` callback (for paragraph/run shapes
+    ``_build_docx_bytes`` can't express) and return its saved bytes.
+    """
+    doc = docx.Document()
+    build(doc)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 class TestReadonlyBlocksWrite:
     # These block on IGlobal.access.require_write before any docx content is
     # touched, so they must run even when python-docx is not installed.
@@ -229,6 +240,57 @@ class TestReplaceText:
             uploaded = docx.Document(io.BytesIO(put_req.data))
             assert uploaded.paragraphs[0].text == 'bar is here'
             assert uploaded.tables[0].rows[0].cells[0].text == 'another bar cell'
+
+    def test_replace_where_replacement_contains_find_does_not_double_count_or_corrupt(self):
+        # Regression: a single-pass replace scanning ONLY the original text.
+        # A run-then-paragraph two-pass approach would re-scan the just-written
+        # replacement, matching 'foo' again inside 'foobar' and corrupting the
+        # result to 'foobarbar is here' with a wrong count of 2.
+        inst = _instance(tier='write')
+        original = _build_docx_bytes(paragraph_text='foo is here', cell_text='no match here')
+        meta_resp = _json_resp({'eTag': '"abc"'})
+        content_resp = _binary_resp(original)
+        put_resp = _json_resp({'id': 'f1', 'name': 'doc.docx'})
+        with mock.patch.object(gc, '_urlopen', side_effect=[meta_resp, content_resp, put_resp]) as u:
+            out = inst.word_replace_text({'file': 'Docs/doc.docx', 'find': 'foo', 'replace': 'foobar'})
+            assert out == {'replacements': 1}
+            put_req = u.call_args_list[2][0][0]
+            uploaded = docx.Document(io.BytesIO(put_req.data))
+            assert uploaded.paragraphs[0].text == 'foobar is here'
+
+    def test_replace_across_a_run_boundary(self):
+        # 'TODO' split into two separate runs ('TO' + 'DO') must still be
+        # found and replaced as a whole, with a correct count of 1.
+        def _build(doc):
+            paragraph = doc.add_paragraph()
+            paragraph.add_run('TO')
+            paragraph.add_run('DO')
+            paragraph.add_run(': fix this')
+
+        original = _docx_bytes_from(_build)
+        inst = _instance(tier='write')
+        meta_resp = _json_resp({'eTag': '"abc"'})
+        content_resp = _binary_resp(original)
+        put_resp = _json_resp({'id': 'f1', 'name': 'doc.docx'})
+        with mock.patch.object(gc, '_urlopen', side_effect=[meta_resp, content_resp, put_resp]) as u:
+            out = inst.word_replace_text({'file': 'Docs/doc.docx', 'find': 'TODO', 'replace': 'DONE'})
+            assert out == {'replacements': 1}
+            put_req = u.call_args_list[2][0][0]
+            uploaded = docx.Document(io.BytesIO(put_req.data))
+            assert uploaded.paragraphs[0].text == 'DONE: fix this'
+
+    def test_replace_two_matches_in_one_paragraph_counts_both(self):
+        inst = _instance(tier='write')
+        original = _build_docx_bytes(paragraph_text='foo and foo again', cell_text='no match here')
+        meta_resp = _json_resp({'eTag': '"abc"'})
+        content_resp = _binary_resp(original)
+        put_resp = _json_resp({'id': 'f1', 'name': 'doc.docx'})
+        with mock.patch.object(gc, '_urlopen', side_effect=[meta_resp, content_resp, put_resp]) as u:
+            out = inst.word_replace_text({'file': 'Docs/doc.docx', 'find': 'foo', 'replace': 'bar'})
+            assert out == {'replacements': 2}
+            put_req = u.call_args_list[2][0][0]
+            uploaded = docx.Document(io.BytesIO(put_req.data))
+            assert uploaded.paragraphs[0].text == 'bar and bar again'
 
 
 @requires_docx

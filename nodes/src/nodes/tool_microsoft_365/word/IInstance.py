@@ -63,41 +63,45 @@ from .IGlobal import IGlobal
 
 
 def _replace_in_paragraph(paragraph, find: str, replace: str) -> int:
-    """Replace ``find`` with ``replace`` across a paragraph's runs; return the count replaced.
+    """Replace every occurrence of ``find`` with ``replace`` in a paragraph; return the count.
 
-    Two passes, in order:
+    Single pass, computed from the paragraph's ORIGINAL text
+    (``paragraph.text``, the concatenation of every run's text at the
+    moment this function is called) — never from text already mutated by
+    an earlier pass. Re-scanning mutated text is how a two-pass
+    run-then-paragraph approach double-counts and corrupts the result
+    whenever ``replace`` itself contains ``find`` as a substring: e.g.
+    find='foo', replace='foobar' on 'foo is here' would count the match
+    once in a run-level pass, rewrite it to 'foobar is here', then find
+    'foo' *again* inside the freshly written 'foobar' on a second pass,
+    counting 2 and corrupting the text to 'foobarbar is here'. Scanning
+    the original text exactly once avoids that entirely.
 
-    1. **Run-level**: for each run whose own text contains ``find`` in full,
-       replace it in place. This is the common case and preserves that
-       run's formatting exactly.
-    2. **Paragraph-level**: after pass 1, any remaining occurrence must span
-       a run boundary (its parts were on either side of a run split, so no
-       single run's text matched it). Rebuild the paragraph's full text
-       (the concatenation of all its runs) and, if ``find`` is still
-       present there, replace it and collapse the paragraph into its first
-       run (clearing the rest). This catches the split-across-runs case
-       that a run-only pass would silently miss, at the cost of merging
-       that paragraph's run-level formatting into the first run's style
-       for the merged span.
+    Paragraphs with zero matches are left completely untouched (runs and
+    their formatting unchanged). Paragraphs with at least one match have
+    their new text written back as:
 
-    Pass 2 only ever matches genuinely cross-run occurrences: anything
-    fully inside one run was already replaced by pass 1 and so no longer
-    matches, which keeps the two passes' counts from double-counting the
-    same occurrence.
+    - **Single run**: set that run's text directly — formatting is
+      unaffected.
+    - **Multiple runs**: set the first run's text to the whole new
+      paragraph text and blank every other run. The first run's
+      formatting wins for the entire merged text — a paragraph made of
+      multiple runs (whether or not the match itself spans a run
+      boundary) loses its intra-paragraph formatting (bold/italic/etc.
+      boundaries) on any replacement. This is a known, documented
+      trade-off of a plain read-modify-write text replace; it is not a
+      substitute for a real Word editing session.
     """
-    count = 0
-    for run in paragraph.runs:
-        if find in run.text:
-            count += run.text.count(find)
-            run.text = run.text.replace(find, replace)
-    full_text = ''.join(run.text for run in paragraph.runs)
-    if find in full_text:
-        count += full_text.count(find)
-        new_text = full_text.replace(find, replace)
-        if paragraph.runs:
-            paragraph.runs[0].text = new_text
-            for run in paragraph.runs[1:]:
-                run.text = ''
+    original = paragraph.text
+    count = original.count(find)
+    if count == 0:
+        return 0
+    new_text = original.replace(find, replace)
+    runs = paragraph.runs
+    if runs:
+        runs[0].text = new_text
+        for run in runs[1:]:
+            run.text = ''
     return count
 
 
@@ -281,21 +285,23 @@ class IInstance(MicrosoftToolInstanceBase):
             },
         },
         description=(
-            'Find and replace text throughout a .docx: every body paragraph and every table cell. '
-            'Replaces within each text run (the common case, preserves per-run formatting) and also '
-            'catches occurrences split across run boundaries by rebuilding the affected paragraph. '
-            'Re-uploads with an If-Match precondition. Returns {replacements: <count>}. Requires the '
-            'write tier.'
+            'Find and replace text throughout a .docx: every body paragraph and every table cell. Each '
+            'matching paragraph is replaced as a whole (single pass over its original text, so a '
+            'replacement that itself contains the search text is never re-matched). Paragraphs with no '
+            'match are untouched; a paragraph made of multiple text runs loses its intra-paragraph '
+            'formatting boundaries when it does match. Re-uploads with an If-Match precondition. Returns '
+            '{replacements: <count>}. Requires the write tier.'
         ),
     )
     def word_replace_text(self, args: dict) -> dict:
         """Find/replace text across paragraphs and table cells; return the replacement count.
 
-        Approach: see :func:`_replace_in_paragraph` — a run-level pass
-        (preserves per-run formatting) followed by a paragraph-level pass
-        that rebuilds paragraphs where the search text spans a run
-        boundary, so replacements aren't missed just because a paragraph's
-        runs were split mid-word. Requires the write tier.
+        Approach: see :func:`_replace_in_paragraph` — a single pass per
+        paragraph over its *original* text (never over already-mutated
+        text), so replacements aren't missed just because a paragraph's
+        runs were split mid-word, and a ``replace`` value that itself
+        contains ``find`` can never be re-matched and double-counted.
+        Requires the write tier.
         """
         args = normalize_tool_input(args, tool_name='tool_word')
         self.IGlobal.access.require_write('word_replace_text')

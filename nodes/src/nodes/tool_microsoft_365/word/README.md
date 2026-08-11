@@ -55,22 +55,28 @@ There are no destructive gate flags.
 
 ### `word_replace_text` approach
 
-Replacement runs in two passes per paragraph (body and table cells alike):
+Replacement runs in a single pass per paragraph (body and table cells
+alike), scanning each paragraph's *original* text exactly once:
 
-1. **Run-level** — for each text run whose own text fully contains `find`,
-   replace it in place. This is the common case and preserves that run's
-   formatting exactly.
-2. **Paragraph-level** — anything still unmatched after pass 1 must span a
-   run boundary (Word frequently splits a paragraph's text across multiple
-   runs, e.g. after a spell-check pass or a partial re-edit). The paragraph's
-   full text is rebuilt from all its runs and, if `find` is still present
-   there, replaced and collapsed into the first run (the rest are cleared).
-   This catches the split-across-runs case a run-only pass would silently
-   miss, at the cost of merging that paragraph's run-level formatting into
-   the first run's style for the merged span.
-
-The two passes never double-count: anything pass 1 already replaced no
-longer matches when pass 2 rebuilds the full text.
+- `original = paragraph.text` (the concatenation of all its runs) is
+  scanned for `find` and the count and replacement are both computed from
+  that one, never-mutated string. Scanning already-replaced text instead
+  (a run-then-paragraph two-pass approach) is how a `replace` value that
+  itself contains `find` would double-count and corrupt the result — e.g.
+  `find='foo'`, `replace='foobar'` on `'foo is here'` would match once,
+  rewrite it to `'foobar is here'`, then find `'foo'` again inside the
+  freshly written `'foobar'` on a second pass, ending with a wrong count
+  of 2 and corrupted text `'foobarbar is here'`. A single pass over the
+  original text avoids this entirely.
+- Paragraphs with **zero** matches are left completely untouched — no run
+  is touched, no formatting is disturbed.
+- Paragraphs with **at least one** match get their new text written into
+  the first run, with every other run in that paragraph blanked. The
+  first run's formatting wins for the whole merged text — a multi-run
+  paragraph that matches loses its intra-paragraph formatting boundaries
+  (bold/italic spans, etc.) on replacement. This is a known trade-off of a
+  plain read-modify-write text replace, not a substitute for a real Word
+  editing session.
 
 ## Setup
 
@@ -91,9 +97,10 @@ matching the auth mode) with admin consent.
 - `word_export_pdf` relies on Graph's server-side format conversion
   (`?format=pdf`); very large or exotic documents may take longer to convert
   or fail conversion upstream.
-- `word_replace_text`'s cross-run rebuild collapses per-run formatting in the
-  merged paragraph to the first run's style — acceptable for plain text edits,
-  not a substitute for a real Word editing session.
+- `word_replace_text` writes a matched paragraph's new text into its first
+  run and blanks the rest, collapsing per-run formatting in that paragraph to
+  the first run's style — acceptable for plain text edits, not a substitute
+  for a real Word editing session. Unmatched paragraphs are untouched.
 - Rate limits are per Entra app / tenant; the node retries `429`/`5xx` with
   exponential backoff.
 
