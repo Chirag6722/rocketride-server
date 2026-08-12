@@ -87,7 +87,7 @@
 		"gohighlevel.allowRawRequest": {
 			"type": "boolean",
 			"title": "Allow raw API requests",
-			"description": "Publishes the generic <b>request</b> tool, which can call any GoHighLevel v2 endpoint by method and path. It uses the same authentication, version header, rate-limit handling and read-only enforcement as the typed tools. Disable to restrict the agent to the typed tools only.",
+			"description": "Publishes the generic <b>request</b> tool, which can call any GoHighLevel v2 endpoint by method and path. It uses the same authentication, version header, rate-limit handling and read-only enforcement as the typed tools. Message-send paths under /conversations/messages additionally require the message_sending tool group. Disable to restrict the agent to the typed tools only.",
 			"default": true,
 			"enum": [
 				[true, "Yes: expose the request tool"],

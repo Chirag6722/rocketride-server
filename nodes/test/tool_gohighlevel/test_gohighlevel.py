@@ -1009,6 +1009,16 @@ class TestReadOnly:
         assert set(writable) - set(read_only) == _write_tool_names()
         assert _write_tool_names(), 'the write stamp is what makes hiding possible'
 
+    def test_the_write_surface_is_pinned_by_count(self):
+        """The hiding test derives its expectation from the same stamp production filters
+        on, so a forgotten writes=True would pass it silently. The counts here are still
+        computed from the stamps, but the expected literals are not: adding or restamping
+        a tool means changing them consciously.
+        """
+        assert len(_write_tool_names()) == 57
+        # _tool_attrs() counts the raw request tool too; the typed surface is 101.
+        assert len(_tool_attrs()) - 1 == 101
+
     def test_reads_stay_published_in_read_only_mode(self):
         published = _instance(tool_groups=ALL_GROUPS, read_only=True)._collect_tool_methods()
         for name in ('contact_list', 'contact_get', 'calendar_list', 'conversation_search', 'opportunity_search'):
@@ -1165,6 +1175,34 @@ class TestGroupGating:
         assert 'message_email_schedule_cancel' in published
         assert 'message_list' in published
 
+    @patch(_CLIENT)
+    def test_the_raw_request_tool_refuses_a_message_send_without_the_group(self, mock_request):
+        """The escape hatch must not reach the one write path the opt-in group gates."""
+        inst = _instance()  # DEFAULT_GROUPS: message_sending is absent
+        with pytest.raises(ValueError, match='message_sending'):
+            inst.request({'method': 'POST', 'path': '/conversations/messages', 'body': {'type': 'SMS'}})
+        with pytest.raises(ValueError, match='message_sending'):
+            inst.request({'method': 'DELETE', 'path': f'/conversations/messages/{RECORD_ID}/schedule'})
+        with pytest.raises(ValueError, match='message_sending'):
+            inst.request({'method': 'DELETE', 'path': f'/conversations/messages/email/{RECORD_ID}/schedule'})
+        # Slash runs and casing are normalized before the prefix check, so creative
+        # spellings of the same route are refused too.
+        with pytest.raises(ValueError, match='message_sending'):
+            inst.request({'method': 'POST', 'path': '//conversations//Messages', 'body': {'type': 'SMS'}})
+        mock_request.assert_not_called()
+
+    @patch(_CLIENT)
+    def test_the_raw_request_tool_sends_messages_with_the_group_enabled(self, mock_request):
+        mock_request.return_value = _ok({'messageId': RECORD_ID})
+        inst = _instance(tool_groups=normalize_groups(['messages', 'message_sending']))
+        result = inst.request({'method': 'POST', 'path': '/conversations/messages', 'body': {'type': 'SMS'}})
+        assert result == {'messageId': RECORD_ID}
+
+    @patch(_CLIENT)
+    def test_the_raw_request_tool_still_reads_messages_without_the_group(self, mock_request):
+        mock_request.return_value = _ok({'messages': []})
+        assert _instance().request({'method': 'GET', 'path': '/conversations/messages/export'}) == {'messages': []}
+
     def test_the_default_set_publishes_71_tools_plus_the_raw_request(self):
         assert len(_instance()._collect_tool_methods()) == 72
 
@@ -1308,6 +1346,55 @@ class TestPagination:
         result = _instance().contact_list_by_business({'businessId': RECORD_ID, 'limit': 2})
         assert result['has_more'] is False
         assert result['next'] is None
+
+
+# ---------------------------------------------------------------------------
+# Wire shapes proven against the live API
+# ---------------------------------------------------------------------------
+
+
+class TestLiveProvenWireShapes:
+    @patch(_CLIENT)
+    def test_calendar_list_sends_show_drafted_in_lowercase(self, mock_request):
+        """A Python True urlencodes as "True", which GoHighLevel answers with a 422."""
+        mock_request.return_value = _ok({'calendars': []})
+        _instance().calendar_list({'showDrafted': True})
+
+        params = mock_request.call_args[1]['params']
+        assert params['showDrafted'] == 'true'
+        assert params['locationId'] == LOCATION_ID
+
+        # bool_params sends False rather than dropping it, so pin that side too.
+        _instance().calendar_list({'showDrafted': False})
+        assert mock_request.call_args[1]['params']['showDrafted'] == 'false'
+
+    @patch(_CLIENT)
+    def test_appointment_get_unwraps_the_live_appointment_envelope(self, mock_request):
+        """The live route answers under "appointment" while both published specs say "event".
+
+        The live suite proved the wire spelling, but it skips without credentials, so this
+        pins it offline: a payload wrapped the way the real API wraps it must come back as
+        a populated record rather than an empty dict.
+        """
+        mock_request.return_value = _ok(
+            {
+                'appointment': {
+                    'id': RECORD_ID,
+                    'calendarId': 'cal' + RECORD_ID[3:],
+                    'contactId': 'con' + RECORD_ID[3:],
+                    'title': 'Discovery call',
+                    'appointmentStatus': 'confirmed',
+                    'startTime': '2026-08-12T09:00:00+02:00',
+                    'endTime': '2026-08-12T09:30:00+02:00',
+                },
+                'traceId': 'trace-not-a-record',
+            }
+        )
+        record = _dispatch(_instance(), 'appointment_get', {'eventId': RECORD_ID})
+
+        assert record, 'the live envelope key must yield a populated record'
+        assert record['id'] == RECORD_ID
+        assert record['appointmentStatus'] == 'confirmed'
 
 
 # ---------------------------------------------------------------------------
@@ -1557,7 +1644,12 @@ def _iglobal_harness(config: dict) -> Iterator[tuple]:
     """A begin-able IGlobal with the engine seams stubbed and warnings captured."""
     # Through sys.modules: the package __init__ re-exports the IGlobal class under the
     # same name, so an ordinary "import tool_gohighlevel.IGlobal" hands back the class.
-    import tool_gohighlevel.IGlobal  # noqa: F401
+    # Under the same scoped stubs the module-level import block uses: test_tools.py
+    # evicts every tool_gohighlevel module from sys.modules at its own import time, so
+    # in a shared session this import can execute IGlobal.py for real rather than hit
+    # the cache, and IGlobal.py needs rocketlib and ai.common.config to exist.
+    with _scoped_stubs():
+        import tool_gohighlevel.IGlobal  # noqa: F401
 
     iglobal_mod = sys.modules['tool_gohighlevel.IGlobal']
 

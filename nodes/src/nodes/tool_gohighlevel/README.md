@@ -456,7 +456,9 @@ recalled. Enable the group only on a sub-account where the send path has been pr
 it and returns the raw response body, where the typed tools validate their input, put the
 sub-account id wherever the endpoint wants it, and return a compact result. The
 `Authorization` and `Version` headers are added for you, and rate-limit retries and
-read-only enforcement apply the same way. Two things it does not do for you: the
+read-only enforcement apply the same way. Writes under `/conversations/messages`
+additionally require the `message_sending` tool group, the same opt-in the typed send
+tools sit behind. Two things it does not do for you: the
 sub-account id is not injected (most endpoints want `locationId`, but
 `GET /opportunities/search` spells it `location_id`), and a trailing slash and the exact
 casing of the path are both load-bearing, since GoHighLevel answers a mis-cased path with

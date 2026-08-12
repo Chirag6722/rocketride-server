@@ -38,6 +38,8 @@ there is no registry to keep in sync with the tool definitions.
 
 from __future__ import annotations
 
+import re
+
 from typing import Callable
 
 from rocketlib import IInstanceBase, tool_function
@@ -214,6 +216,18 @@ class IInstance(
             raise ValueError(f'request: method must be one of {", ".join(sorted(_ALLOWED_METHODS))}')
         if method not in _SAFE_METHODS:
             self._require_write()
+            # The message-send surface is an explicit opt-in group because a bad send
+            # cannot be recalled, and this tool must not be a way around that: without
+            # the group, a write under /conversations/messages (message_send and both
+            # schedule cancels) is refused. GET stays open, reading messages is default.
+            # Compared case-insensitively with slash runs collapsed so spellings like
+            # //conversations//Messages cannot slip past the prefix check.
+            normalized = re.sub(r'/+', '/', path).lstrip('/').lower()
+            if 'message_sending' not in self.IGlobal.tool_groups and normalized.startswith('conversations/messages'):
+                raise ValueError(
+                    'This operation is not permitted: writes under /conversations/messages require the '
+                    'message_sending tool group'
+                )
 
         if '://' in path:
             raise ValueError('request: "path" must be a path such as "/contacts/", not a full URL')

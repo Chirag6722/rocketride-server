@@ -42,6 +42,7 @@ from ._base import (
     STR,
     GoHighLevelToolsBase,
     body_from,
+    bool_params,
     params_from,
     passthrough,
     require_id,
@@ -296,7 +297,8 @@ class CalendarsMixin(GoHighLevelToolsBase):
     )
     def calendar_list(self, args):
         args = self._args(args, 'calendar_list')
-        params = params_from(args, ('groupId', 'showDrafted'))
+        params = params_from(args, ('groupId',))
+        params.update(bool_params(args, ('showDrafted',)))
         params['locationId'] = self._location()
         return self._list('/calendars/', key='calendars', cleaner=_calendar_summary, params=params)
 
