@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hmac
 import logging
 import os
 
@@ -55,17 +56,25 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if _API_KEY:
             auth = request.headers.get('authorization', '')
-            if auth != f'Bearer {_API_KEY}':
+            # compare_digest, not '!=': a plain comparison short-circuits on
+            # the first differing byte and leaks the token a byte at a time.
+            if not hmac.compare_digest(auth, f'Bearer {_API_KEY}'):
                 return JSONResponse({'error': 'unauthorized'}, status_code=401)
         return await call_next(request)
 
 
 def _get_client() -> RocketRideClient:
-    """Create a RocketRideClient from environment/settings."""
+    """Create a RocketRideClient from environment/settings.
+
+    The credential lives on ``Settings.apikey`` — the same field the stdio
+    server reads. This used to say ``settings.auth``, a field that has never
+    existed on the dataclass, so every tool call and every health probe died
+    with AttributeError before reaching the engine.
+    """
     settings = load_settings()
     return RocketRideClient(
         uri=settings.uri,
-        auth=settings.auth or '',
+        auth=settings.apikey or '',
     )
 
 
@@ -154,15 +163,37 @@ def create_app() -> Starlette:
         return Response()
 
     async def health(_request: Request) -> JSONResponse:
-        """Return server health status and engine reachability."""
+        """Report whether this server can actually serve a tool call.
+
+        Answers 503 — not 200 — when it cannot. The Docker HEALTHCHECK is a
+        bare ``urlopen``, so a 200 with ``status: degraded`` in the body left
+        the container marked healthy while every tool call failed; that is how
+        the ``settings.auth`` crash shipped unnoticed.
+
+        A configuration fault (missing env vars, a wiring bug in this module)
+        is reported separately from an engine that is simply not answering:
+        collapsing both into ``engine: unreachable`` sent operators looking at
+        the wrong process.
+        """
         status: dict = {'status': 'ok', 'server': 'rocketride-mcp'}
         try:
             client = _get_client()
+        except Exception as exc:
+            logger.exception('health: cannot build engine client')
+            status['status'] = 'error'
+            status['error'] = 'configuration'
+            status['detail'] = str(exc)
+            return JSONResponse(status, status_code=503)
+
+        try:
             await client.connect()
             await client.disconnect()
-        except Exception:
+        except Exception as exc:
+            logger.warning('health: engine unreachable: %s', exc)
             status['status'] = 'degraded'
             status['engine'] = 'unreachable'
+            return JSONResponse(status, status_code=503)
+
         return JSONResponse(status)
 
     middleware = [Middleware(AuthMiddleware)] if _API_KEY else []
