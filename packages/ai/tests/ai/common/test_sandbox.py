@@ -14,8 +14,13 @@ timeout.
 
 from __future__ import annotations
 
+import gc
+import threading
+import time
+
 import pytest
 
+from ai.common import sandbox
 from ai.common.sandbox import execute_sandboxed
 
 
@@ -203,3 +208,134 @@ result = total
     assert out['timed_out'] is True
     assert out['exit_code'] == -1
     assert '1s' in out['stderr']
+
+
+def _live_sandbox_threads() -> list[threading.Thread]:
+    """Sandbox worker threads still running in this process."""
+    return [t for t in threading.enumerate() if t.name == 'sandbox-exec' and t.is_alive()]
+
+
+def test_timeout_actually_terminates_the_worker_thread():
+    """The deadline stops the script, it does not merely stop waiting for it.
+
+    ``Thread.join(timeout)`` returns without touching the thread, so before
+    the fix a runaway script kept running inside the engine for the life of
+    the process while the tool reported it as killed.
+    """
+    before = len(_live_sandbox_threads())
+
+    out = execute_sandboxed('x = 0\nwhile True:\n    x += 1', timeout=1)
+
+    assert out['timed_out'] is True
+    assert out['exit_code'] == -1
+
+    # Termination is asynchronous (the exception is delivered at the worker's
+    # next bytecode boundary), so allow a brief moment for it to unwind.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and len(_live_sandbox_threads()) > before:
+        time.sleep(0.05)
+
+    assert len(_live_sandbox_threads()) == before, 'timed-out script is still running'
+
+
+def test_timeout_terminates_a_script_that_swallows_exceptions():
+    """A loop wrapped in ``except Exception`` cannot survive its deadline.
+
+    The interrupt is a ``BaseException`` subclass precisely so the broad
+    handler an agent is likely to write around its own work does not eat it.
+    """
+    before = len(_live_sandbox_threads())
+
+    out = execute_sandboxed(
+        """
+x = 0
+while True:
+    try:
+        x += 1
+    except Exception:
+        pass
+""",
+        timeout=1,
+    )
+
+    assert out['timed_out'] is True
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and len(_live_sandbox_threads()) > before:
+        time.sleep(0.05)
+
+    assert len(_live_sandbox_threads()) == before, 'exception-swallowing script survived its deadline'
+
+
+def test_timeout_releases_memory_allocated_by_the_script():
+    """Killing the worker drops its frame, so its allocations are reclaimed.
+
+    The pre-fix failure mode was an abandoned thread appending to a list at
+    hundreds of MB/s until the OS killed the engine process — measured here
+    as live objects rather than RSS, which the allocator may not return to
+    the OS promptly.
+    """
+    out = execute_sandboxed(
+        """
+chunks = []
+while True:
+    chunks.append('x' * 100000)
+""",
+        timeout=1,
+    )
+    assert out['timed_out'] is True
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _live_sandbox_threads():
+        time.sleep(0.05)
+    assert not _live_sandbox_threads()
+
+    # The worker is gone, so nothing keeps growing: two samples a moment apart
+    # must not show the allocation loop still adding objects.
+    gc.collect()
+    first = len(gc.get_objects())
+    time.sleep(0.5)
+    gc.collect()
+    second = len(gc.get_objects())
+    assert second <= first + 1000, f'allocation continued after timeout ({first} -> {second} objects)'
+
+
+def test_timeout_verdict_is_not_overwritten_by_the_dying_worker():
+    """A script that re-raises on interruption cannot rewrite the verdict.
+
+    The worker publishes into its own dict and the timeout path ignores it,
+    so the caller always sees the timeout, never the script's parting error.
+    """
+    out = execute_sandboxed(
+        """
+x = 0
+try:
+    while True:
+        x += 1
+except BaseException:
+    raise ValueError('script had the last word')
+""",
+        timeout=1,
+    )
+
+    assert out['timed_out'] is True
+    assert out['exit_code'] == -1
+    assert 'timed out' in out['stderr']
+    assert 'script had the last word' not in out['stderr']
+
+
+def test_sandbox_refuses_work_once_uninterruptible_threads_pile_up(monkeypatch):
+    """Saturation is reported, not absorbed silently.
+
+    Some blocking C calls cannot be interrupted between bytecodes. Rather
+    than stacking more of them behind a timeout that cannot bite, the
+    sandbox fails fast and says why.
+    """
+    monkeypatch.setattr(sandbox, '_live_abandoned_count', lambda: sandbox._MAX_ABANDONED_THREADS)
+
+    out = execute_sandboxed('result = 1')
+
+    assert out['exit_code'] == 1
+    assert out['timed_out'] is False
+    assert 'Sandbox unavailable' in out['stderr']
+    assert 'result' not in out

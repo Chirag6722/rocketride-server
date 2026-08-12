@@ -68,7 +68,7 @@ Code runs in a restricted in-process sandbox built on **RestrictedPython**:
 1. **Restricted compilation**: `compile_restricted` transforms the AST to inject runtime guard calls that prevent attribute/item access escapes. Code that violates the compilation policy is rejected with `exit_code: 1`.
 2. **Safe builtins**: RestrictedPython's `safe_builtins` replaces the full `__builtins__`. A curated set of everyday data-work builtins is added back (`dict`, `list`, `set`, `enumerate`, `map`, `filter`, `max`, `min`, `sum`, `print`, `type`, and similar).
 3. **Allowlist-only imports**: a gated `__import__` permits only allowlisted modules (matched on the top-level package name). Everything else raises `ImportError` listing the allowed modules.
-4. **Timeout enforcement**: the script runs in a daemon thread; if it exceeds the timeout the call returns with `timed_out: true` and `exit_code: -1`.
+4. **Timeout enforcement**: the script runs in a worker thread that is interrupted once its deadline passes — an asynchronous exception is injected into it, so a runaway loop unwinds and everything it allocated is released. The call returns with `timed_out: true` and `exit_code: -1`. A script blocked inside a single long-running C call cannot be interrupted between bytecodes; that case is reported in `stderr` and, once a few such scripts have accumulated, the tool refuses further work rather than letting the engine process degrade silently.
 
 ### Default allowed modules
 

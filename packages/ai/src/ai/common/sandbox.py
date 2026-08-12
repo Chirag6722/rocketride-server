@@ -38,11 +38,18 @@ Runs agent-supplied code via RestrictedPython inside a controlled namespace with
 
 4. **stdout capture** via a ``StringIO``-backed ``print()`` override.
 
-5. **Timeout enforcement** via a daemon thread with ``thread.join(timeout)``.
+5. **Timeout enforcement** via a worker thread that is *interrupted* once its
+   deadline passes.  ``thread.join(timeout)`` only stops waiting — it does not
+   stop the script — so the deadline is followed by asynchronous exception
+   injection (``PyThreadState_SetAsyncExc``) into the worker.  CPython checks
+   for pending async exceptions between bytecodes, so a runaway pure-Python
+   loop unwinds, its frame is dropped, and everything it allocated is
+   reclaimed.  See :func:`_terminate_thread`.
 """
 
 from __future__ import annotations
 
+import ctypes
 import importlib
 import subprocess
 import operator
@@ -50,7 +57,7 @@ import sys
 import threading
 import traceback
 import warnings
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Set
 
 from RestrictedPython import compile_restricted, safe_builtins, PrintCollector
 from RestrictedPython.Eval import default_guarded_getiter
@@ -62,6 +69,24 @@ from RestrictedPython.Guards import (
 
 _TIMEOUT = 20
 _MAX_OUTPUT = 51200  # 50 KB
+
+# ── Timeout termination tuning ──────────────────────────────────────────────
+# How many times an async exception is injected into a worker that blew its
+# deadline. One injection is enough for ordinary runaway code; the retries
+# exist for scripts that catch broadly inside their loop (a bare ``except:``
+# swallows even a BaseException) — each retry lands on a later bytecode, and
+# the count is bounded so a pathological script cannot spin us forever.
+_KILL_ATTEMPTS = 5
+
+# Grace period waited after each injection before checking again.
+_KILL_GRACE_SECONDS = 0.25
+
+# Sandbox threads that survived every injection attempt (only reachable via a
+# long-running C call, which cannot be interrupted between bytecodes) are
+# tracked here. Past _MAX_ABANDONED_THREADS still-alive entries the sandbox
+# stops accepting work rather than letting the engine process degrade with no
+# signal to anyone.
+_MAX_ABANDONED_THREADS = 4
 
 # ── Default allowed modules ─────────────────────────────────────────────────
 # Safe, pure-computation modules with no filesystem, network, or OS access.
@@ -166,6 +191,85 @@ def _guarded_getitem(obj: Any, key: Any) -> Any:
 _COMPILE_LOCK = threading.Lock()
 
 
+class _SandboxTimeout(BaseException):
+    """Injected into a sandbox worker whose deadline has passed.
+
+    Derives from ``BaseException``, not ``Exception``, so the ordinary
+    ``except Exception:`` an agent script is likely to write around its own
+    work cannot swallow the interruption.
+    """
+
+
+# Workers that could not be interrupted (see _MAX_ABANDONED_THREADS). Guarded
+# by _ABANDONED_LOCK; pruned of finished threads on every call.
+_ABANDONED_LOCK = threading.Lock()
+_ABANDONED_THREADS: List[threading.Thread] = []
+
+
+def _async_raise(thread_id: int, exc_type: type) -> bool:
+    """Schedule *exc_type* to be raised inside the thread with *thread_id*.
+
+    Thin wrapper over ``PyThreadState_SetAsyncExc``. The exception is not
+    raised at once: CPython delivers it the next time that thread crosses a
+    bytecode boundary, which is why a script blocked inside a single long C
+    call (one huge allocation, ``time.sleep``) cannot be reached this way.
+
+    Returns True when the exception was armed, False when the thread had
+    already finished or the call misbehaved.
+    """
+    # The C signature takes an `unsigned long` thread id, which is what
+    # ctypes.c_ulong maps to on every platform we build for.
+    modified = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(thread_id),
+        ctypes.py_object(exc_type),
+    )
+    if modified == 0:
+        # No such thread state — the worker finished on its own.
+        return False
+    if modified > 1:
+        # Documented contract: more than one thread state touched means we
+        # armed something we did not intend to. Undo it and report failure.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
+        return False
+    return True
+
+
+def _terminate_thread(thread: threading.Thread) -> bool:
+    """Interrupt a sandbox worker that overran its deadline.
+
+    Injects :class:`_SandboxTimeout` and waits a short grace period, repeating
+    up to ``_KILL_ATTEMPTS`` times so a script that catches broadly inside its
+    loop still loses the race. Returns True once the worker is gone, False if
+    it survived every attempt (it is then tracked as abandoned).
+    """
+    thread_id = thread.ident
+    if thread_id is None:
+        return not thread.is_alive()
+
+    for _ in range(_KILL_ATTEMPTS):
+        if not thread.is_alive():
+            return True
+        if not _async_raise(thread_id, _SandboxTimeout):
+            # Thread state is gone: it finished between the two checks.
+            return True
+        thread.join(timeout=_KILL_GRACE_SECONDS)
+
+    return not thread.is_alive()
+
+
+def _abandon(thread: threading.Thread) -> None:
+    """Record a worker that could not be interrupted."""
+    with _ABANDONED_LOCK:
+        _ABANDONED_THREADS.append(thread)
+
+
+def _live_abandoned_count() -> int:
+    """Number of still-running uninterruptible workers, pruning finished ones."""
+    with _ABANDONED_LOCK:
+        _ABANDONED_THREADS[:] = [t for t in _ABANDONED_THREADS if t.is_alive()]
+        return len(_ABANDONED_THREADS)
+
+
 def execute_sandboxed(
     code: str,
     *,
@@ -181,7 +285,23 @@ def execute_sandboxed(
     *allowed_modules*, if provided, is merged with ``_DEFAULT_ALLOWED_MODULES``
     to form the full allowlist.  Only modules in this set can be imported.
     """
-    # ── 0. Compile with RestrictedPython ───────────────────────────────
+    # ── 0. Refuse to add load when earlier scripts could not be stopped ─
+    # Uninterruptible workers keep burning CPU and holding memory for the
+    # life of the process. Failing loudly here is strictly better than
+    # quietly stacking more of them behind a timeout that cannot bite.
+    stuck = _live_abandoned_count()
+    if stuck >= _MAX_ABANDONED_THREADS:
+        return {
+            'stdout': '',
+            'stderr': (
+                f'[Sandbox unavailable: {stuck} script(s) from earlier timeouts could not be '
+                f'interrupted and are still running. Restart the engine process to clear them.]'
+            ),
+            'exit_code': 1,
+            'timed_out': False,
+        }
+
+    # ── 0b. Compile with RestrictedPython ──────────────────────────────
     try:
         # compile_restricted emits a SyntaxWarning ("Prints, but never reads
         # 'printed' variable") for ANY code that prints without reading the
@@ -263,36 +383,54 @@ def execute_sandboxed(
         '__name__': '<agent_script>',
     }
 
-    # ── 5. Run in a daemon thread with timeout ─────────────────────────
-    timed_out = False
-    stderr = ''
-    exit_code = 0
+    # ── 5. Run in a worker thread, interrupting it on timeout ──────────
+    # The worker publishes its outcome into `outcome` rather than closing over
+    # the caller's variables: on the timeout path the worker is still unwinding
+    # while this function builds the response, and a script that turns the
+    # injected _SandboxTimeout into some other error must not be able to
+    # overwrite the timeout verdict on its way out.
+    outcome: Dict[str, Any] = {}
 
     def _run() -> None:
-        nonlocal stderr, exit_code
         try:
             exec(compiled, sandbox_globals)  # noqa: S102
+        except _SandboxTimeout:
+            # Deadline injection — the caller already owns the verdict.
+            return
         except SystemExit as e:
             if e.code is None:
-                exit_code = 0
+                outcome['exit_code'] = 0
             elif isinstance(e.code, int):
-                exit_code = e.code
+                outcome['exit_code'] = e.code
             else:
-                stderr = f'SystemExit: {e.code}'
-                exit_code = 1
+                outcome['stderr'] = f'SystemExit: {e.code}'
+                outcome['exit_code'] = 1
         except Exception:
-            stderr = traceback.format_exc()
-            exit_code = 1
+            outcome['stderr'] = traceback.format_exc()
+            outcome['exit_code'] = 1
 
     effective_timeout = timeout if timeout is not None else _TIMEOUT
-    thread = threading.Thread(target=_run, daemon=True)
+    thread = threading.Thread(target=_run, daemon=True, name='sandbox-exec')
     thread.start()
     thread.join(timeout=effective_timeout)
 
-    if thread.is_alive():
-        timed_out = True
+    timed_out = thread.is_alive()
+    if timed_out:
+        # join() only stopped waiting — actually stop the script, so its frame
+        # is dropped and everything it allocated is released.
+        killed = _terminate_thread(thread)
         stderr = f'[Execution timed out after {effective_timeout}s]'
+        if not killed:
+            _abandon(thread)
+            stderr += (
+                ' [Warning: the script could not be interrupted and is still running '
+                'in the background — it is likely blocked inside a single long-running '
+                'operation. Restart the engine process to reclaim its resources.]'
+            )
         exit_code = -1
+    else:
+        stderr = outcome.get('stderr', '')
+        exit_code = outcome.get('exit_code', 0)
 
     # ── 6. Collect output ──────────────────────────────────────────────
     # RestrictedPython stores the PrintCollector instance as '_print';
