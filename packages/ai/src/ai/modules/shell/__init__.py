@@ -44,7 +44,7 @@ Routes registered:
 from typing import Any, Dict
 
 from ai.web import WebServer
-from .shell import shell_static, apps_static
+from .shell import shell_static, apps_static, apps_session
 
 
 def initModule(server: WebServer, config: Dict[str, Any]):
@@ -75,6 +75,19 @@ def initModule(server: WebServer, config: Dict[str, Any]):
         path='/shell/{file_path:path}',
         routeHandler=shell_static,
         methods=['GET'],
+        public=True,
+    )
+
+    # ── App-session cookie (SaaS) ───────────────────────────────────────
+    # POST /apps/session stows the caller's token into an /apps-scoped cookie
+    # so the browser attaches it to bundle fetches (the shell calls this after
+    # a successful connect). Registered BEFORE the catch-all so it isn't
+    # swallowed by the bundle server. Trust-free — apps_static does the real
+    # per-app permission check on every serve (SaaS only).
+    server.add_route(
+        path='/apps/session',
+        routeHandler=apps_session,
+        methods=['POST'],
         public=True,
     )
 

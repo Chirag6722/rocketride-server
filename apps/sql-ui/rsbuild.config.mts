@@ -63,7 +63,7 @@ export default defineConfig(() => {
 		},
 		output: {
 			distPath: {
-				root: path.join(process.env.ROCKETRIDE_BUILD_ROOT ?? '../../build', 'apps', 'sql-ui'),
+				root: path.join(process.env.ROCKETRIDE_BUILD_ROOT ?? '../../build', 'apps', pkg.appManifest.id),
 			},
 			assetPrefix: 'auto',
 			cleanDistPath: true,

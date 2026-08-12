@@ -76,6 +76,25 @@ const SHARED_UI_SRC = fs.existsSync(path.join(PROJECT_ROOT, 'apps', 'shared', 's
 	: path.join(PROJECT_ROOT, 'shared', 'src');
 
 /**
+ * Read an app's id from its package.json (appManifest.id), falling back to the
+ * source folder name when absent/unreadable. The SERVED directory keys on this
+ * so bundles live at dist/server/static/apps/<appId>/ and the server can
+ * authorize each fetch by app id.
+ *
+ * @param {string} appRoot  - The app's root directory.
+ * @param {string} fallback - Value to use when the id can't be read.
+ * @returns {string} The app id (served directory name).
+ */
+function readAppId(appRoot, fallback) {
+	try {
+		const pkg = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
+		return (pkg.appManifest && pkg.appManifest.id) || fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+/**
  * Create a standard builder module for an MF remote app.
  *
  * Generates actions: bundle, register, copy, build, clean, and optionally dev.
@@ -88,9 +107,13 @@ const SHARED_UI_SRC = fs.existsSync(path.join(PROJECT_ROOT, 'apps', 'shared', 's
  * @returns {object} Builder module definition with name, description, and actions.
  */
 function createAppModule({ name, description, appRoot, dev = false }) {
-	// Derived paths
-	const buildDir       = path.join(BUILD_ROOT, 'apps', name);
-	const serverStaticDir = path.join(DIST_ROOT, 'server', 'static', 'apps', name);
+	// Derived paths — EVERYTHING keys on the app id (rsbuild's distPath, the
+	// served static dir, apps.json URLs): build/apps/<appId> -> copied to
+	// dist/server/static/apps/<appId>/ so the server serves + authorizes
+	// bundles by id, matching the apps.json entry that registerApp writes.
+	const appId = readAppId(appRoot, name);
+	const buildDir        = path.join(BUILD_ROOT, 'apps', appId);
+	const serverStaticDir = path.join(DIST_ROOT, 'server', 'static', 'apps', appId);
 
 	// Build input tracking
 	const srcDir       = path.join(appRoot, 'src');

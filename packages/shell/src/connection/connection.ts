@@ -1179,6 +1179,30 @@ export class ConnectionManager implements IConnectionManager {
 		try { localStorage.setItem(LS_TOKEN, token); } catch (e) {
 			console.error('[ConnectionManager] Failed to save token:', e);
 		}
+		this.primeAppsCookie(token);
+	}
+
+	/**
+	 * Stow the user token in the ``/apps``-scoped cookie so the browser
+	 * attaches it to MF bundle fetches — SaaS gates each bundle by per-app
+	 * permission (see the server's ``/apps/session`` + ``apps_static``).
+	 *
+	 * Same-origin relative POST (the shell is served from the app origin, so
+	 * the cookie lands on the right host), fire-and-forget: the bundle route
+	 * re-validates on every serve, so a lost prime is self-correcting. Harmless
+	 * in OSS — the endpoint mints a cookie the OSS serve path ignores.
+	 *
+	 * @param token - The authenticated user token to cookie.
+	 */
+	private primeAppsCookie(token: string): void {
+		if (!token) return;
+		try {
+			void fetch('/apps/session', {
+				method: 'POST',
+				headers: { Authorization: `Bearer ${token}` },
+				credentials: 'same-origin',
+			}).catch(() => { /* best-effort */ });
+		} catch { /* best-effort — the bundle route re-checks anyway */ }
 	}
 
 	/** Load token from localStorage. Migrates the old sessionStorage value once. */

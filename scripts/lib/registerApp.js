@@ -29,7 +29,7 @@
  * It does not need to be declared in package.json.
  *
  * The icon file is copied to the app's build output dir and served at:
- *   /${APPS_BASE_URL}/${dirName}/icon.svg
+ *   /${APPS_BASE_URL}/${appManifest.id}/icon.svg
  *
  * apps.json is written to both build/ (dev server publicDir) and
  * dist/server/static/ (production server static root).
@@ -167,8 +167,15 @@ function registerApp(appRoot) {
 				return;
 			}
 
-			const dirName  = path.basename(appRoot);
-			const buildDir = path.join(BUILD_ROOT, APPS_BASE, dirName);
+			// The SERVED name is the app id, not the source folder: rsbuild
+			// bundles to build/apps/<appId>, appModule's copy step lands it at
+			// dist/server/static/apps/<appId>/, so every public URL
+			// (entry/icon/readme) points there and the server authorizes each
+			// fetch by app id. The icon/readme copies below MUST target the
+			// same appId dir — keying them on the source folder name would
+			// recreate the old build/apps/<folder>-ui dirs.
+			const servedName = appManifest.id;
+			const buildDir = path.join(BUILD_ROOT, APPS_BASE, servedName);
 
 			// Derive moduleId from appId
 			const moduleId = appManifest.moduleId ?? toModuleId(appManifest.id);
@@ -247,7 +254,7 @@ function registerApp(appRoot) {
 				try {
 					fs.mkdirSync(buildDir, { recursive: true });
 					fs.copyFileSync(iconSrc, path.join(buildDir, 'icon.svg'));
-					icon = `/${APPS_BASE}/${dirName}/icon.svg`;
+					icon = `/${APPS_BASE}/${servedName}/icon.svg`;
 				} catch {
 					warnings.push(`Warning: icon not found at ${appManifest.icon}`);
 				}
@@ -260,7 +267,7 @@ function registerApp(appRoot) {
 				try {
 					fs.mkdirSync(buildDir, { recursive: true });
 					fs.copyFileSync(readmeSrc, path.join(buildDir, 'README.md'));
-					readme = `/${APPS_BASE}/${dirName}/README.md`;
+					readme = `/${APPS_BASE}/${servedName}/README.md`;
 
 					// Copy sibling assets/ directory if it exists (images referenced by the README)
 					const assetsSrc = path.join(path.dirname(readmeSrc), 'assets');
@@ -295,7 +302,7 @@ function registerApp(appRoot) {
 				categories:    appManifest.categories ?? [],
 				// Settings contribution (VSCode contributes.configuration shape)
 				...(configuration ? { configuration } : {}),
-				entry:         `/${APPS_BASE}/${dirName}/remoteEntry.js`,
+				entry:         `/${APPS_BASE}/${servedName}/remoteEntry.js`,
 				// Shell contract version this app was built against (for prune analysis).
 				...(shellApiVersion !== null ? { shellApiVersion } : {}),
 				// App monetization mode
