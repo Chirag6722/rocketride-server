@@ -53,7 +53,7 @@ Execute a Python script and return its output. The tool description shown to the
 }
 ```
 
-- `exit_code` is `0` on success, `1` on exception (or blocked compilation), `-1` on timeout.
+- `exit_code` is `0` on success, `1` on exception, blocked compilation, or a refused call (see saturation below), `-1` on timeout. A refusal is the one `exit_code: 1` case that is not about the submitted script: it reports `timed_out: false` and names the condition in `stderr`.
 - `stdout` is the captured `print()` output; `stderr` carries the traceback if the script raised.
 - If the script assigns a value to a variable named `result`, it is returned in the `result` field. JSON-compatible values (`str`, `int`, `float`, `bool`, `list`, `dict`, `None`) are returned as-is; anything else is returned as its `repr()`.
 - `stdout` and `stderr` are each truncated to 50 KB, keeping the head and tail with a truncation marker in between.
@@ -68,7 +68,8 @@ Code runs in a restricted in-process sandbox built on **RestrictedPython**:
 1. **Restricted compilation**: `compile_restricted` transforms the AST to inject runtime guard calls that prevent attribute/item access escapes. Code that violates the compilation policy is rejected with `exit_code: 1`.
 2. **Safe builtins**: RestrictedPython's `safe_builtins` replaces the full `__builtins__`. A curated set of everyday data-work builtins is added back (`dict`, `list`, `set`, `enumerate`, `map`, `filter`, `max`, `min`, `sum`, `print`, `type`, and similar).
 3. **Allowlist-only imports**: a gated `__import__` permits only allowlisted modules (matched on the top-level package name). Everything else raises `ImportError` listing the allowed modules.
-4. **Timeout enforcement**: the script runs in a worker thread that is interrupted once its deadline passes — an asynchronous exception is injected into it, so a runaway loop unwinds and everything it allocated is released. The call returns with `timed_out: true` and `exit_code: -1`. A script blocked inside a single long-running C call cannot be interrupted between bytecodes; that case is reported in `stderr` and, once a few such scripts have accumulated, the tool refuses further work rather than letting the engine process degrade silently.
+4. **Timeout enforcement**: the script runs in a worker thread that is interrupted once its deadline passes — an asynchronous exception is injected into it, so a runaway loop unwinds and everything it allocated is released. The call returns with `timed_out: true` and `exit_code: -1`.
+5. **Saturation refusal**: a script blocked inside a single long-running C call cannot be interrupted between bytecodes. Such a worker keeps running in the background; the timeout result says so in `stderr`. Once four of them have accumulated, further calls are refused outright with `exit_code: 1`, `timed_out: false`, and a `stderr` beginning `[Sandbox unavailable: ...]`, rather than letting the engine process degrade silently. **Restart the engine process to clear abandoned workers** — nothing else reclaims them.
 
 ### Default allowed modules
 

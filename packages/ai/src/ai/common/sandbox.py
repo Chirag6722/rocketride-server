@@ -44,7 +44,8 @@ Runs agent-supplied code via RestrictedPython inside a controlled namespace with
    injection (``PyThreadState_SetAsyncExc``) into the worker.  CPython checks
    for pending async exceptions between bytecodes, so a runaway pure-Python
    loop unwinds, its frame is dropped, and everything it allocated is
-   reclaimed.  See :func:`_terminate_thread`.
+   reclaimed.  Injection is interlocked against thread-id reuse — see
+   :class:`_WorkerHandle` and :func:`_terminate_thread`.
 """
 
 from __future__ import annotations
@@ -234,26 +235,77 @@ def _async_raise(thread_id: int, exc_type: type) -> bool:
     return True
 
 
-def _terminate_thread(thread: threading.Thread) -> bool:
+class _WorkerHandle:
+    """Interlock that makes async-exception injection safe to aim.
+
+    CPython recycles ``Thread.ident`` values once a thread exits, so a
+    terminator that checks ``is_alive()`` and *then* injects into a captured
+    ident can miss its window: the worker finishes in between, a brand-new
+    thread inherits the id, and ``_SandboxTimeout`` — a ``BaseException``, so
+    nothing ordinary catches it — lands in an unrelated engine thread.
+
+    The handle closes that window. The worker sets ``running`` under ``lock``
+    before it starts and clears it under the same lock on its way out; the
+    terminator only injects while holding the lock and seeing ``running``.
+    Because the worker cannot complete its own clear-and-exit without that
+    lock, its id cannot be recycled while an injection is in flight.
+    """
+
+    __slots__ = ('lock', 'running', 'ident')
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.running = False
+        self.ident: int | None = None
+
+
+def _clear_running(handle: _WorkerHandle) -> None:
+    """Mark a worker finished, retrying if an injected timeout lands here.
+
+    ``running`` MUST read False before the worker thread exits: the terminator
+    trusts it to decide whether the captured ident still belongs to this
+    worker, and a stale True is exactly the mis-aimed injection the handle
+    exists to prevent. An injection can arrive while this runs (the worker is
+    past ``exec`` but has not exited yet), so swallow it and try again.
+    """
+    while True:
+        try:
+            with handle.lock:
+                handle.running = False
+            return
+        except _SandboxTimeout:
+            continue
+
+
+def _terminate_thread(thread: threading.Thread, handle: _WorkerHandle) -> bool:
     """Interrupt a sandbox worker that overran its deadline.
 
     Injects :class:`_SandboxTimeout` and waits a short grace period, repeating
     up to ``_KILL_ATTEMPTS`` times so a script that catches broadly inside its
     loop still loses the race. Returns True once the worker is gone, False if
     it survived every attempt (it is then tracked as abandoned).
-    """
-    thread_id = thread.ident
-    if thread_id is None:
-        return not thread.is_alive()
 
+    Every injection happens under ``handle.lock`` with ``handle.running`` still
+    set — see :class:`_WorkerHandle` for why aiming at a bare ident is unsafe.
+    """
     for _ in range(_KILL_ATTEMPTS):
         if not thread.is_alive():
             return True
-        if not _async_raise(thread_id, _SandboxTimeout):
-            # Thread state is gone: it finished between the two checks.
-            return True
+
+        with handle.lock:
+            if not handle.running:
+                # The worker is already past exec and on its way out. Never
+                # inject now: the ident may belong to another thread by the
+                # time the call lands.
+                break
+            if handle.ident is None or not _async_raise(handle.ident, _SandboxTimeout):
+                break
+
         thread.join(timeout=_KILL_GRACE_SECONDS)
 
+    # Give a worker that broke out of the loop mid-exit a moment to finish.
+    if thread.is_alive():
+        thread.join(timeout=_KILL_GRACE_SECONDS)
     return not thread.is_alive()
 
 
@@ -390,8 +442,12 @@ def execute_sandboxed(
     # injected _SandboxTimeout into some other error must not be able to
     # overwrite the timeout verdict on its way out.
     outcome: Dict[str, Any] = {}
+    handle = _WorkerHandle()
 
     def _run() -> None:
+        handle.ident = threading.get_ident()
+        with handle.lock:
+            handle.running = True
         try:
             exec(compiled, sandbox_globals)  # noqa: S102
         except _SandboxTimeout:
@@ -408,6 +464,8 @@ def execute_sandboxed(
         except Exception:
             outcome['stderr'] = traceback.format_exc()
             outcome['exit_code'] = 1
+        finally:
+            _clear_running(handle)
 
     effective_timeout = timeout if timeout is not None else _TIMEOUT
     thread = threading.Thread(target=_run, daemon=True, name='sandbox-exec')
@@ -418,7 +476,7 @@ def execute_sandboxed(
     if timed_out:
         # join() only stopped waiting — actually stop the script, so its frame
         # is dropped and everything it allocated is released.
-        killed = _terminate_thread(thread)
+        killed = _terminate_thread(thread, handle)
         stderr = f'[Execution timed out after {effective_timeout}s]'
         if not killed:
             _abandon(thread)

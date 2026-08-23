@@ -210,9 +210,25 @@ result = total
     assert '1s' in out['stderr']
 
 
-def _live_sandbox_threads() -> list[threading.Thread]:
+def _live_sandbox_threads() -> set[threading.Thread]:
     """Sandbox worker threads still running in this process."""
-    return [t for t in threading.enumerate() if t.name == 'sandbox-exec' and t.is_alive()]
+    return {t for t in threading.enumerate() if t.name == 'sandbox-exec' and t.is_alive()}
+
+
+def _assert_new_workers_terminated(baseline: set[threading.Thread], message: str) -> None:
+    """Wait for workers started after *baseline* to die, then assert they did.
+
+    Compares thread IDENTITY against the baseline set rather than counting.
+    Every worker shares the name ``sandbox-exec``, so a leftover from an
+    earlier test in the same process can exit mid-wait and move a count in
+    either direction; a set difference is independent of test order and of
+    what any other worker does. Termination is asynchronous — the exception
+    is delivered at the worker's next bytecode boundary — hence the wait.
+    """
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and _live_sandbox_threads() - baseline:
+        time.sleep(0.05)
+    assert not _live_sandbox_threads() - baseline, message
 
 
 def test_timeout_actually_terminates_the_worker_thread():
@@ -222,20 +238,14 @@ def test_timeout_actually_terminates_the_worker_thread():
     the fix a runaway script kept running inside the engine for the life of
     the process while the tool reported it as killed.
     """
-    before = len(_live_sandbox_threads())
+    baseline = _live_sandbox_threads()
 
     out = execute_sandboxed('x = 0\nwhile True:\n    x += 1', timeout=1)
 
     assert out['timed_out'] is True
     assert out['exit_code'] == -1
 
-    # Termination is asynchronous (the exception is delivered at the worker's
-    # next bytecode boundary), so allow a brief moment for it to unwind.
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and len(_live_sandbox_threads()) > before:
-        time.sleep(0.05)
-
-    assert len(_live_sandbox_threads()) == before, 'timed-out script is still running'
+    _assert_new_workers_terminated(baseline, 'timed-out script is still running')
 
 
 def test_timeout_terminates_a_script_that_swallows_exceptions():
@@ -244,7 +254,7 @@ def test_timeout_terminates_a_script_that_swallows_exceptions():
     The interrupt is a ``BaseException`` subclass precisely so the broad
     handler an agent is likely to write around its own work does not eat it.
     """
-    before = len(_live_sandbox_threads())
+    baseline = _live_sandbox_threads()
 
     out = execute_sandboxed(
         """
@@ -260,11 +270,7 @@ while True:
 
     assert out['timed_out'] is True
 
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and len(_live_sandbox_threads()) > before:
-        time.sleep(0.05)
-
-    assert len(_live_sandbox_threads()) == before, 'exception-swallowing script survived its deadline'
+    _assert_new_workers_terminated(baseline, 'exception-swallowing script survived its deadline')
 
 
 def test_timeout_releases_memory_allocated_by_the_script():
@@ -275,6 +281,8 @@ def test_timeout_releases_memory_allocated_by_the_script():
     as live objects rather than RSS, which the allocator may not return to
     the OS promptly.
     """
+    baseline = _live_sandbox_threads()
+
     out = execute_sandboxed(
         """
 chunks = []
@@ -285,19 +293,19 @@ while True:
     )
     assert out['timed_out'] is True
 
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and _live_sandbox_threads():
-        time.sleep(0.05)
-    assert not _live_sandbox_threads()
+    _assert_new_workers_terminated(baseline, 'allocating script is still running')
 
-    # The worker is gone, so nothing keeps growing: two samples a moment apart
-    # must not show the allocation loop still adding objects.
+    # Smoke check, not a bound: gc.get_objects() counts every tracked object in
+    # the interpreter, so pytest internals and other threads contribute noise.
+    # The tolerance is wide on purpose — the regression it guards against added
+    # objects by the hundred thousand per second, which no amount of ambient
+    # churn resembles. The assertion above already proves the worker is gone.
     gc.collect()
     first = len(gc.get_objects())
     time.sleep(0.5)
     gc.collect()
     second = len(gc.get_objects())
-    assert second <= first + 1000, f'allocation continued after timeout ({first} -> {second} objects)'
+    assert second <= first + 20000, f'allocation continued after timeout ({first} -> {second} objects)'
 
 
 def test_timeout_verdict_is_not_overwritten_by_the_dying_worker():
@@ -339,3 +347,97 @@ def test_sandbox_refuses_work_once_uninterruptible_threads_pile_up(monkeypatch):
     assert out['timed_out'] is False
     assert 'Sandbox unavailable' in out['stderr']
     assert 'result' not in out
+
+
+# ---------------------------------------------------------------------------
+# Termination interlock (thread-id reuse)
+# ---------------------------------------------------------------------------
+
+
+def test_terminator_never_injects_once_the_worker_has_finished(monkeypatch):
+    """No injection is aimed at an ident the worker no longer owns.
+
+    CPython recycles ``Thread.ident`` after a thread exits. A terminator that
+    checked ``is_alive()`` and then injected into a captured ident could land
+    ``_SandboxTimeout`` — a ``BaseException`` — in an unrelated engine thread.
+    ``_WorkerHandle.running`` is the interlock; with it clear, nothing fires.
+    """
+    injected: list[tuple[int, type]] = []
+    monkeypatch.setattr(
+        sandbox,
+        '_async_raise',
+        lambda ident, exc: injected.append((ident, exc)) or True,
+    )
+
+    # A live thread standing in for one whose id was recycled by another.
+    release = threading.Event()
+    victim = threading.Thread(target=release.wait, name='sandbox-exec', daemon=True)
+    victim.start()
+    try:
+        handle = sandbox._WorkerHandle()
+        handle.ident = victim.ident
+        handle.running = False  # worker already left exec
+
+        sandbox._terminate_thread(victim, handle)
+
+        assert injected == [], 'injected into a thread the handle no longer claims'
+    finally:
+        release.set()
+        victim.join(timeout=5)
+
+
+def test_terminator_injects_while_the_worker_still_claims_the_ident(monkeypatch):
+    """The interlock does not disarm the normal path: a running worker is hit."""
+    injected: list[tuple[int, type]] = []
+    monkeypatch.setattr(
+        sandbox,
+        '_async_raise',
+        lambda ident, exc: injected.append((ident, exc)) or True,
+    )
+
+    release = threading.Event()
+    worker = threading.Thread(target=release.wait, name='sandbox-exec', daemon=True)
+    worker.start()
+    try:
+        handle = sandbox._WorkerHandle()
+        handle.ident = worker.ident
+        handle.running = True
+
+        sandbox._terminate_thread(worker, handle)
+
+        assert injected, 'a running worker was never interrupted'
+        assert all(ident == worker.ident for ident, _ in injected)
+        assert all(exc is sandbox._SandboxTimeout for _, exc in injected)
+    finally:
+        release.set()
+        worker.join(timeout=5)
+
+
+def test_clear_running_survives_an_injection_landing_inside_it():
+    """``running`` is always cleared, even if the timeout arrives mid-clear.
+
+    A stale ``running=True`` would re-open the reuse window for the next
+    injection attempt, so the clear retries rather than propagating.
+    """
+    handle = sandbox._WorkerHandle()
+    handle.running = True
+
+    real_lock = handle.lock
+    calls = {'n': 0}
+
+    class _LockRaisingOnce:
+        def __enter__(self):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise sandbox._SandboxTimeout()
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc):
+            return real_lock.__exit__(*exc)
+
+    handle.lock = _LockRaisingOnce()
+
+    sandbox._clear_running(handle)
+
+    assert handle.running is False
+    assert calls['n'] == 2, 'the interrupted clear was not retried'
