@@ -61,8 +61,15 @@ def _connectable_client() -> MagicMock:
 
 
 def test_health_returns_200_when_the_engine_round_trips(env_rocketride: None) -> None:
-    """A healthy server answers 200 with status ok."""
-    with patch.object(sse, '_get_client', return_value=_connectable_client()):
+    """A healthy server answers 200 with status ok, and closes the probe.
+
+    The lifecycle assertions matter as much as the payload: without them a
+    change that dropped ``disconnect()`` would still pass here while leaking
+    one engine connection per health probe — and probes run every 30s under
+    the Docker HEALTHCHECK.
+    """
+    client = _connectable_client()
+    with patch.object(sse, '_get_client', return_value=client):
         with TestClient(sse.create_app()) as http:
             response = http.get('/health')
 
@@ -70,6 +77,8 @@ def test_health_returns_200_when_the_engine_round_trips(env_rocketride: None) ->
     body = response.json()
     assert body['status'] == 'ok'
     assert body['server'] == 'rocketride-mcp'
+    client.connect.assert_awaited_once()
+    client.disconnect.assert_awaited_once()
 
 
 def test_health_returns_503_when_the_engine_is_unreachable(env_rocketride: None) -> None:
@@ -107,6 +116,10 @@ def test_health_reports_a_configuration_fault_distinctly(env_rocketride: None) -
     assert body['status'] == 'error'
     assert body['error'] == 'configuration'
     assert 'engine' not in body
+    # /health is unauthenticated, so the raw exception text — which can carry
+    # the URI or the credential — must not reach the body.
+    assert 'Missing required environment variable' not in body['detail']
+    assert 'see server logs' in body['detail']
 
 
 # -----------------------------------------------------------------------------

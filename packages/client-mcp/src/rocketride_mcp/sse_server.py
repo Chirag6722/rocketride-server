@@ -178,11 +178,15 @@ def create_app() -> Starlette:
         status: dict = {'status': 'ok', 'server': 'rocketride-mcp'}
         try:
             client = _get_client()
-        except Exception as exc:
+        except Exception:
+            # The exception text can carry ROCKETRIDE_URI or the credential,
+            # and /health is deliberately unauthenticated (it bypasses the
+            # Bearer check above) — so the detail goes to the log, which is
+            # already trusted, and the body stays a fixed string.
             logger.exception('health: cannot build engine client')
             status['status'] = 'error'
             status['error'] = 'configuration'
-            status['detail'] = str(exc)
+            status['detail'] = 'engine client could not be constructed; see server logs'
             return JSONResponse(status, status_code=503)
 
         try:
