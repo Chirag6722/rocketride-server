@@ -119,7 +119,7 @@ engine:
     # so each pod gets its own private copy and the chart refuses to render
     # more than one replica. Supported schemes:
     #   s3://bucket/prefix          (credentials in engine.secrets.RR_STORE_SECRET_KEY)
-    #   azureblob://container/prefix
+    #   azureblob://container/prefix   (azure://container/prefix is an accepted alias)
     #   filesystem://path           (single replica only; lost on pod restart)
     # RR_STORE_URL: 's3://my-bucket/rocketride'
 

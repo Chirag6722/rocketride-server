@@ -96,7 +96,7 @@ helm install rocketride deploy/helm/rocketride/ -f deploy/helm/examples/external
 
 **Scaling out requires a shared file store first.** The engine is not stateless: with `RR_STORE_URL` unset it keeps account files on a container-local filesystem path, so every pod would hold its own private copy — a file written through one pod is absent when the next request lands on another. On that same backend the engine also mints a per-process URL-signing key, so signed download URLs issued by one pod return 401 on every other.
 
-Point `RR_STORE_URL` at `s3://` or `azureblob://` and both problems go away at once: those backends are shared by construction and presign natively, so no signing key is involved. The chart **refuses to render** a multi-replica release without one.
+Point `RR_STORE_URL` at `s3://` or `azureblob://` (the engine also accepts `azure://` as an alias for the latter) and both problems go away at once: those backends are shared by construction and presign natively, so no signing key is involved. The chart **refuses to render** a multi-replica release without one.
 
 For production high-availability deployments:
 
