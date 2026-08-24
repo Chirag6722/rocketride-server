@@ -376,7 +376,8 @@ def test_terminator_never_injects_once_the_worker_has_finished(monkeypatch):
     try:
         handle = sandbox._WorkerHandle()
         handle.ident = victim.ident
-        handle.running = False  # worker already left exec
+        handle.started.set()  # it did start...
+        handle.running = False  # ...and has already left exec
 
         sandbox._terminate_thread(victim, handle)
 
@@ -402,6 +403,7 @@ def test_terminator_injects_while_the_worker_still_claims_the_ident(monkeypatch)
         handle = sandbox._WorkerHandle()
         handle.ident = worker.ident
         handle.running = True
+        handle.started.set()
 
         sandbox._terminate_thread(worker, handle)
 
@@ -441,3 +443,88 @@ def test_clear_running_survives_an_injection_landing_inside_it():
 
     assert handle.running is False
     assert calls['n'] == 2, 'the interrupted clear was not retried'
+
+
+def test_immediate_deadline_still_terminates_the_worker():
+    """A zero-length deadline interrupts the script rather than orphaning it.
+
+    ``join(0)`` returns before the worker has necessarily run its first
+    statement, so the terminator sees the handle mid-startup. Treating that as
+    "already finished" would skip injection entirely and leave the script
+    running for the life of the process.
+    """
+    baseline = _live_sandbox_threads()
+
+    out = execute_sandboxed('x = 0\nwhile True:\n    x += 1', timeout=0)
+
+    assert out['timed_out'] is True
+    assert out['exit_code'] == -1
+    assert 'could not be interrupted' not in out['stderr']
+
+    _assert_new_workers_terminated(baseline, 'script outlived a zero-length deadline')
+
+
+def test_worker_that_has_not_published_yet_is_still_interrupted(monkeypatch):
+    """The startup window is closed, not merely narrow.
+
+    Widens the real gap between ``thread.start()`` and the worker announcing
+    its ident, which is what makes the race observable on a loaded machine.
+    Only the worker's publication is delayed — the termination logic is
+    untouched.
+    """
+    baseline = _live_sandbox_threads()
+    real_get_ident = threading.get_ident
+    main_ident = real_get_ident()
+
+    def _slow_get_ident():
+        ident = real_get_ident()
+        if ident != main_ident:
+            time.sleep(0.2)
+        return ident
+
+    monkeypatch.setattr(sandbox.threading, 'get_ident', _slow_get_ident)
+
+    out = execute_sandboxed('x = 0\nwhile True:\n    x += 1', timeout=0)
+
+    assert out['timed_out'] is True
+    assert 'could not be interrupted' not in out['stderr'], (
+        'worker was reported uninterruptible when it had simply not started yet'
+    )
+
+    _assert_new_workers_terminated(baseline, 'unpublished worker was never interrupted')
+
+
+def test_terminator_waits_for_a_worker_that_has_not_started(monkeypatch):
+    """``running == False`` before startup must not be read as "finished"."""
+    injected: list[int] = []
+    monkeypatch.setattr(
+        sandbox,
+        '_async_raise',
+        lambda ident, exc: injected.append(ident) or True,
+    )
+
+    release = threading.Event()
+    worker = threading.Thread(target=release.wait, name='sandbox-exec', daemon=True)
+    worker.start()
+    try:
+        handle = sandbox._WorkerHandle()
+        handle.ident = worker.ident
+        handle.running = False  # not published yet — `started` is still clear
+
+        # Publish from another thread while the terminator is waiting.
+        def _publish():
+            time.sleep(0.2)
+            with handle.lock:
+                handle.running = True
+            handle.started.set()
+
+        publisher = threading.Thread(target=_publish, daemon=True)
+        publisher.start()
+
+        sandbox._terminate_thread(worker, handle)
+        publisher.join(timeout=5)
+
+        assert injected, 'terminator gave up on a worker that had not announced itself yet'
+    finally:
+        release.set()
+        worker.join(timeout=5)

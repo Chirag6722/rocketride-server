@@ -82,6 +82,12 @@ _KILL_ATTEMPTS = 5
 # Grace period waited after each injection before checking again.
 _KILL_GRACE_SECONDS = 0.25
 
+# How long a terminator waits for a worker to announce itself before giving up
+# on reaching it. A worker publishes its ident as its first statement, so this
+# is scheduler latency and nothing more; the bound exists so a pathological
+# interpreter state cannot wedge the caller.
+_STARTUP_WAIT_SECONDS = 5.0
+
 # Sandbox threads that survived every injection attempt (only reachable via a
 # long-running C call, which cannot be interrupted between bytecodes) are
 # tracked here. Past _MAX_ABANDONED_THREADS still-alive entries the sandbox
@@ -251,12 +257,15 @@ class _WorkerHandle:
     lock, its id cannot be recycled while an injection is in flight.
     """
 
-    __slots__ = ('lock', 'running', 'ident')
+    __slots__ = ('lock', 'running', 'ident', 'started')
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.running = False
         self.ident: int | None = None
+        # Distinguishes "has not started yet" from "already finished"; both
+        # read as running == False, and they need opposite responses.
+        self.started = threading.Event()
 
 
 def _clear_running(handle: _WorkerHandle) -> None:
@@ -288,6 +297,15 @@ def _terminate_thread(thread: threading.Thread, handle: _WorkerHandle) -> bool:
     Every injection happens under ``handle.lock`` with ``handle.running`` still
     set — see :class:`_WorkerHandle` for why aiming at a bare ident is unsafe.
     """
+    # Wait for the worker to announce itself first. Until it does,
+    # ``running == False`` means "not started yet", not "already finished" —
+    # and those need opposite responses. Reading the first as the second is
+    # how a script could outlive a very short deadline entirely: the
+    # terminator would decline to inject, report the worker as
+    # uninterruptible, and leave it running for the life of the process.
+    if not handle.started.wait(timeout=_STARTUP_WAIT_SECONDS) and thread.is_alive():
+        return False
+
     for _ in range(_KILL_ATTEMPTS):
         if not thread.is_alive():
             return True
@@ -445,9 +463,12 @@ def execute_sandboxed(
     handle = _WorkerHandle()
 
     def _run() -> None:
+        # Announce first, before any work: the terminator blocks on `started`
+        # so it can tell an unstarted worker from a finished one.
         handle.ident = threading.get_ident()
         with handle.lock:
             handle.running = True
+        handle.started.set()
         try:
             exec(compiled, sandbox_globals)  # noqa: S102
         except _SandboxTimeout:
