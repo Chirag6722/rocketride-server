@@ -9,6 +9,8 @@
 # before reaching the engine, and /health answered 200 regardless, so the
 # container's HEALTHCHECK reported it healthy.
 
+import asyncio
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -177,3 +179,61 @@ def test_auth_middleware_is_absent_when_no_api_key_is_set(
     app = sse.create_app()
 
     assert not [m for m in app.user_middleware if m.cls is sse.AuthMiddleware]
+
+
+def test_health_bounds_a_probe_that_never_answers(monkeypatch, env_rocketride: None) -> None:
+    """An engine that accepts the socket then goes quiet cannot hang /health.
+
+    ``RocketRideClient.connect()`` bounds only the WebSocket handshake; the
+    authentication request that follows has no default timeout. Without a
+    whole-probe budget the endpoint stays pending indefinitely.
+    """
+    monkeypatch.setattr(sse, '_HEALTH_PROBE_TIMEOUT', 0.05)
+
+    async def _never_answers() -> None:
+        await asyncio.sleep(30)
+
+    client = MagicMock()
+    client.connect = AsyncMock(side_effect=_never_answers)
+    client.disconnect = AsyncMock()
+
+    with patch.object(sse, '_get_client', return_value=client):
+        with TestClient(sse.create_app()) as http:
+            response = http.get('/health')
+
+    assert response.status_code == 503
+    assert response.json()['engine'] == 'unreachable'
+    # The cancelled probe still ran its cleanup rather than stranding the socket.
+    client.disconnect.assert_awaited()
+
+
+def test_health_disconnects_even_when_the_probe_fails(env_rocketride: None) -> None:
+    """A failed connect still attempts the close, so nothing is left half-open."""
+    client = MagicMock()
+    client.connect = AsyncMock(side_effect=OSError('connection refused'))
+    client.disconnect = AsyncMock()
+
+    with patch.object(sse, '_get_client', return_value=client):
+        with TestClient(sse.create_app()) as http:
+            response = http.get('/health')
+
+    assert response.status_code == 503
+    client.disconnect.assert_awaited_once()
+
+
+def test_health_survives_a_disconnect_that_raises(env_rocketride: None) -> None:
+    """A close that fails on its own does not turn a healthy engine into 503.
+
+    The engine answered — that is what the probe asked. A noisy teardown is
+    logged by the client, not escalated into a health verdict.
+    """
+    client = MagicMock()
+    client.connect = AsyncMock()
+    client.disconnect = AsyncMock(side_effect=RuntimeError('already closed'))
+
+    with patch.object(sse, '_get_client', return_value=client):
+        with TestClient(sse.create_app()) as http:
+            response = http.get('/health')
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'ok'

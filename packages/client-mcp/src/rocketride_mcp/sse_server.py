@@ -21,6 +21,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import hmac
 import logging
 import os
@@ -46,6 +48,12 @@ logger = logging.getLogger(__name__)
 
 _API_KEY = os.environ.get('MCP_API_KEY', '')
 
+# Whole-probe budget for /health. RocketRideClient.connect() bounds only the
+# WebSocket handshake — the authentication request that follows has no default
+# timeout — so an engine that accepts the socket and then goes quiet would
+# leave the probe pending forever.
+_HEALTH_PROBE_TIMEOUT = 10.0
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer token for all non-health endpoints."""
@@ -61,6 +69,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if not hmac.compare_digest(auth, f'Bearer {_API_KEY}'):
                 return JSONResponse({'error': 'unauthorized'}, status_code=401)
         return await call_next(request)
+
+
+async def _probe_engine(client: RocketRideClient) -> None:
+    """Open and close one engine connection, always attempting the close.
+
+    The disconnect lives in ``finally`` so a probe that fails partway — or is
+    cancelled by the surrounding :func:`asyncio.wait_for` — does not strand a
+    half-open connection. A close that fails on its own is suppressed: the
+    engine has already answered by then, which is what the probe asked.
+    """
+    try:
+        await client.connect()
+    finally:
+        with contextlib.suppress(Exception):
+            await client.disconnect()
 
 
 def _get_client() -> RocketRideClient:
@@ -190,8 +213,7 @@ def create_app() -> Starlette:
             return JSONResponse(status, status_code=503)
 
         try:
-            await client.connect()
-            await client.disconnect()
+            await asyncio.wait_for(_probe_engine(client), timeout=_HEALTH_PROBE_TIMEOUT)
         except Exception as exc:
             logger.warning('health: engine unreachable: %s', exc)
             status['status'] = 'degraded'
