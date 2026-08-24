@@ -54,6 +54,10 @@ _API_KEY = os.environ.get('MCP_API_KEY', '')
 # leave the probe pending forever.
 _HEALTH_PROBE_TIMEOUT = 10.0
 
+# Separate budget for closing the probe connection, so a disconnect that
+# blocks cannot extend the endpoint past the probe budget above.
+_HEALTH_CLEANUP_TIMEOUT = 5.0
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Require Bearer token for all non-health endpoints."""
@@ -71,19 +75,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def _probe_engine(client: RocketRideClient) -> None:
-    """Open and close one engine connection, always attempting the close.
+async def _close_quietly(client: RocketRideClient) -> None:
+    """Close a probe connection under its own deadline, swallowing failures.
 
-    The disconnect lives in ``finally`` so a probe that fails partway — or is
-    cancelled by the surrounding :func:`asyncio.wait_for` — does not strand a
-    half-open connection. A close that fails on its own is suppressed: the
-    engine has already answered by then, which is what the probe asked.
+    Deliberately called from the request handler rather than from inside the
+    probe coroutine. Cleanup attached to a cancelled await runs *during*
+    cancellation, and ``asyncio.wait_for`` waits for that cancellation to
+    finish — so a disconnect that blocks would push /health past the very
+    budget the timeout exists to enforce. Run here, the close is an ordinary
+    await in an uncancelled coroutine with a bound of its own.
+
+    A close that fails on its own is suppressed rather than downgrading the
+    verdict: the engine already answered, which is what the probe asked.
     """
-    try:
-        await client.connect()
-    finally:
-        with contextlib.suppress(Exception):
-            await client.disconnect()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(client.disconnect(), timeout=_HEALTH_CLEANUP_TIMEOUT)
 
 
 def _get_client() -> RocketRideClient:
@@ -213,12 +219,16 @@ def create_app() -> Starlette:
             return JSONResponse(status, status_code=503)
 
         try:
-            await asyncio.wait_for(_probe_engine(client), timeout=_HEALTH_PROBE_TIMEOUT)
+            await asyncio.wait_for(client.connect(), timeout=_HEALTH_PROBE_TIMEOUT)
         except Exception as exc:
             logger.warning('health: engine unreachable: %s', exc)
             status['status'] = 'degraded'
             status['engine'] = 'unreachable'
             return JSONResponse(status, status_code=503)
+        finally:
+            # Runs on both paths, including the timeout — the connection is
+            # closed whether or not the engine answered.
+            await _close_quietly(client)
 
         return JSONResponse(status)
 

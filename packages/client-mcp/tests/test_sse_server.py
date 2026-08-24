@@ -10,6 +10,7 @@
 # container's HEALTHCHECK reported it healthy.
 
 import asyncio
+import time
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -237,3 +238,34 @@ def test_health_survives_a_disconnect_that_raises(env_rocketride: None) -> None:
 
     assert response.status_code == 200
     assert response.json()['status'] == 'ok'
+
+
+def test_health_stays_bounded_when_cleanup_also_blocks(monkeypatch, env_rocketride: None) -> None:
+    """A blocking disconnect cannot extend the endpoint past its budget.
+
+    ``asyncio.wait_for`` waits for the cancellation of the coroutine it
+    cancels, so cleanup attached to the cancelled await would have been
+    awaited *inside* that window with no bound of its own — the endpoint
+    could hang despite the probe budget. The close is bounded separately.
+    """
+    monkeypatch.setattr(sse, '_HEALTH_PROBE_TIMEOUT', 0.05)
+    monkeypatch.setattr(sse, '_HEALTH_CLEANUP_TIMEOUT', 0.05)
+
+    async def _never_answers() -> None:
+        await asyncio.sleep(30)
+
+    client = MagicMock()
+    client.connect = AsyncMock(side_effect=_never_answers)
+    client.disconnect = AsyncMock(side_effect=_never_answers)
+
+    started = time.monotonic()
+    with patch.object(sse, '_get_client', return_value=client):
+        with TestClient(sse.create_app()) as http:
+            response = http.get('/health')
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 503
+    assert response.json()['engine'] == 'unreachable'
+    # Both budgets are 50ms; a generous ceiling still fails if either await
+    # is unbounded (the blocked calls sleep for 30s).
+    assert elapsed < 10, f'/health outran its budget: {elapsed:.1f}s'
