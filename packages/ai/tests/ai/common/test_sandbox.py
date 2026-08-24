@@ -482,7 +482,10 @@ def test_worker_that_has_not_published_yet_is_still_interrupted(monkeypatch):
             time.sleep(0.2)
         return ident
 
-    monkeypatch.setattr(sandbox.threading, 'get_ident', _slow_get_ident)
+    # Patch the sandbox's own seam, not threading.get_ident itself: the shared
+    # module binding is used by threading's internals and by every other thread
+    # in the process, so delaying it would slow far more than this worker.
+    monkeypatch.setattr(sandbox, '_current_ident', _slow_get_ident)
 
     out = execute_sandboxed('x = 0\nwhile True:\n    x += 1', timeout=0)
 
@@ -525,6 +528,7 @@ def test_terminator_waits_for_a_worker_that_has_not_started(monkeypatch):
         publisher.join(timeout=5)
 
         assert injected, 'terminator gave up on a worker that had not announced itself yet'
+        assert all(ident == worker.ident for ident in injected), 'injection was aimed at the wrong thread'
     finally:
         release.set()
         worker.join(timeout=5)

@@ -197,6 +197,11 @@ def _guarded_getitem(obj: Any, key: Any) -> Any:
 # it without meaningfully gating sandbox throughput.
 _COMPILE_LOCK = threading.Lock()
 
+# Indirection so a test can delay THIS module's view of the current thread id
+# without patching the shared threading module, whose binding is also used by
+# threading's own internals and by every other thread in the process.
+_current_ident = threading.get_ident
+
 
 class _SandboxTimeout(BaseException):
     """Injected into a sandbox worker whose deadline has passed.
@@ -465,7 +470,7 @@ def execute_sandboxed(
     def _run() -> None:
         # Announce first, before any work: the terminator blocks on `started`
         # so it can tell an unstarted worker from a finished one.
-        handle.ident = threading.get_ident()
+        handle.ident = _current_ident()
         with handle.lock:
             handle.running = True
         handle.started.set()
