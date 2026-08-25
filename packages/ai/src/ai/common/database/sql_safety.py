@@ -72,9 +72,21 @@ def is_sql_safe(sql: str) -> bool:
 
         stmt_lower = stmt.lower()
 
+        # String literals are blanked first so a row of data that happens to
+        # contain the word can never trip the clause checks below (e.g.
+        # SELECT 'shipped into market' is an ordinary query).
+        stmt_no_strings = re.sub(r"'(?:[^']|'')*'", "''", stmt_lower)
+        stmt_no_strings = re.sub(r'"(?:[^"]|"")*"', '""', stmt_no_strings)
+
         # SELECT ... INTO OUTFILE / INTO DUMPFILE can write arbitrary files on
         # the database server — block it even though it starts with SELECT.
-        if re.search(r'\bselect\b.*\binto\s+(outfile|dumpfile)\b', stmt_lower, re.DOTALL):
+        if re.search(r'\bselect\b.*\binto\s+(outfile|dumpfile)\b', stmt_no_strings, re.DOTALL):
+            return False
+
+        # INTO <table> writes too: PostgreSQL and SQL Server create a new
+        # table from the result set. Same family as OUTFILE above, and the
+        # same class of problem this check exists to catch — statement shape.
+        if re.search(r'\bselect\b.*\binto\b', stmt_no_strings, re.DOTALL):
             return False
 
     return True

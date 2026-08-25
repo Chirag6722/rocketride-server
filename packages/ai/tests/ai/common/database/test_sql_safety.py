@@ -164,3 +164,66 @@ def test_into_inside_string_does_not_false_positive():
     # Plain SELECT with 'into' as data, not as a clause keyword.
     sql = "SELECT 'shipped into market' AS phrase"
     assert is_sql_safe(sql) is True
+
+
+# ---------------------------------------------------------------------------
+# SELECT ... INTO <table>
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    'sql',
+    [
+        'SELECT * INTO stolen_users FROM users',
+        'select id, email into exfil from users where 1=1',
+        'SELECT a INTO other_schema.copy FROM t',
+        'EXPLAIN SELECT * INTO copy FROM t',
+    ],
+)
+def test_select_into_table_is_blocked(sql):
+    """``SELECT ... INTO <table>`` creates a table on PostgreSQL and SQL Server.
+
+    Same family as the ``INTO OUTFILE`` guard above and the same class of
+    problem this check exists to catch — a statement whose shape writes,
+    despite the leading SELECT.
+    """
+    assert is_sql_safe(sql) is False
+
+
+@pytest.mark.parametrize(
+    'sql',
+    [
+        "SELECT 'shipped into market' AS phrase",
+        "SELECT 'into' AS w, 'outfile' AS x FROM t",
+        'SELECT into_count FROM t',
+        'SELECT point_into FROM t',
+        'SELECT "into" FROM t',
+        "SELECT id FROM t WHERE note = 'moved into storage'",
+    ],
+)
+def test_into_as_data_or_identifier_is_not_blocked(sql):
+    """The word must be a clause, not a value or part of a name.
+
+    String literals are blanked before the INTO checks run, so ordinary rows
+    that happen to contain the word stay queryable.
+    """
+    assert is_sql_safe(sql) is True
+
+
+def test_shape_check_does_not_claim_to_be_read_only():
+    """Statements with side effects still pass — by design, documented as such.
+
+    ``is_sql_safe`` is a shape check. These are all genuinely dangerous and
+    all shaped like reads; the read-only guarantee comes from
+    ``DatabaseGlobalBase.read_only_connection``, not from this function. The
+    test exists so nobody re-reads this gate as a security boundary.
+    """
+    side_effecting = [
+        'SELECT pg_terminate_backend(pid) FROM pg_stat_activity',
+        'SELECT pg_sleep(3600)',
+        'SELECT pg_read_file(:path)',
+        'SELECT nextval(:seq)',
+        'SELECT * FROM users FOR UPDATE',
+        'SELECT SLEEP(3600)',
+    ]
+    assert all(is_sql_safe(sql) for sql in side_effecting)
