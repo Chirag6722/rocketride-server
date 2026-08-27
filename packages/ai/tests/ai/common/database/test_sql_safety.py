@@ -227,3 +227,63 @@ def test_shape_check_does_not_claim_to_be_read_only():
         'SELECT SLEEP(3600)',
     ]
     assert all(is_sql_safe(sql) for sql in side_effecting)
+
+
+# ---------------------------------------------------------------------------
+# Lexing: literals, quoted identifiers and comments in one pass
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    'sql',
+    [
+        "SELECT '--x' INTO OUTFILE '/tmp/export'",
+        "SELECT '--' INTO DUMPFILE '/tmp/export'",
+        "SELECT '/*' INTO OUTFILE '/tmp/export'",
+        "SELECT '#x' INTO OUTFILE '/tmp/export'",
+    ],
+)
+def test_comment_marker_inside_a_literal_cannot_hide_a_write(sql):
+    """A literal containing a comment marker must not swallow the clause after it.
+
+    Stripping comments before masking literals turned
+    ``SELECT '--x' INTO OUTFILE '/tmp/f'`` into ``SELECT '`` — an ordinary
+    read as far as the gate was concerned, taking a file-writing statement
+    straight through. Both are now masked in a single left-to-right pass.
+    """
+    assert is_sql_safe(sql) is False
+
+
+@pytest.mark.parametrize(
+    'sql',
+    [
+        'SELECT `into` FROM t',
+        'SELECT `into`, id FROM `orders`',
+        'SELECT `select` FROM `from`',
+    ],
+)
+def test_backtick_identifiers_are_not_read_as_clauses(sql):
+    """MySQL quotes identifiers with backticks; a column named `into` is valid SQL."""
+    assert is_sql_safe(sql) is True
+
+
+def test_semicolon_inside_a_literal_does_not_split_the_statement():
+    """Statement splitting runs on masked text, so data cannot fake a chain."""
+    assert is_sql_safe("SELECT 'a;DROP TABLE t' FROM x") is True
+
+
+def test_quote_inside_a_comment_does_not_open_a_literal():
+    """The reverse ordering bug: a comment's apostrophe must not eat later SQL."""
+    assert is_sql_safe("SELECT 1 -- it's fine\n") is True
+
+
+def test_backslash_is_not_treated_as_an_escape():
+    """A backslash must not hide a clause, even though MySQL escapes with it.
+
+    MySQL treats ``\'`` as an escaped quote; PostgreSQL, under the default
+    ``standard_conforming_strings``, does not. Honouring the escape would mask
+    the ``INTO OUTFILE`` that follows and let a PostgreSQL write through.
+    Ignoring it can only end a literal early and expose more text to the
+    checks — a false rejection at worst, never a bypass.
+    """
+    assert is_sql_safe(r"SELECT 'it' INTO OUTFILE '/tmp/f'") is False

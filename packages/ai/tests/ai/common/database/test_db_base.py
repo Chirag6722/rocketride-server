@@ -582,7 +582,9 @@ def _global_with_dialect(dialect: str, conn: _RecordingConnection, timeout: int 
     [
         ('postgresql', ['BEGIN READ ONLY', 'statement_timeout', 'idle_in_transaction_session_timeout']),
         ('mysql', ['max_execution_time', 'START TRANSACTION READ ONLY']),
-        ('mariadb', ['max_execution_time', 'START TRANSACTION READ ONLY']),
+        # MariaDB's own knob, in seconds — the MySQL spelling is an unknown
+        # variable there and would fail the connection outright.
+        ('mariadb', ['max_statement_time', 'START TRANSACTION READ ONLY']),
         ('clickhouse', ['readonly = 1', 'max_execution_time']),
     ],
 )
@@ -708,3 +710,27 @@ def test_execute_sql_query_runs_inside_the_read_only_connection():
     assert rows == [{'id': 1, 'name': 'a'}]
     assert used['read_only'] is True
     assert used['plain_connect'] is False
+
+
+def test_mariadb_uses_its_own_timeout_variable_in_seconds():
+    """MariaDB has no max_execution_time; its knob is max_statement_time, in seconds.
+
+    Sending the MySQL spelling raises "unknown system variable" and takes the
+    connection down, so every query on a MariaDB deployment would fail.
+    """
+    conn = _RecordingConnection()
+    with _global_with_dialect('mariadb', conn, timeout=45).read_only_connection():
+        pass
+
+    issued = ' | '.join(conn.driver_sql)
+    assert 'SET SESSION max_statement_time = 45' in issued
+    assert 'max_execution_time' not in issued
+
+
+def test_mysql_keeps_milliseconds():
+    """MySQL's max_execution_time is milliseconds — the two must not be swapped."""
+    conn = _RecordingConnection()
+    with _global_with_dialect('mysql', conn, timeout=45).read_only_connection():
+        pass
+
+    assert 'SET SESSION max_execution_time = 45000' in conn.driver_sql

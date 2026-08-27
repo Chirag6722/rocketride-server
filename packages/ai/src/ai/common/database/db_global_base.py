@@ -142,9 +142,18 @@ class DatabaseGlobalBase(IGlobalBase, ABC):
                 f'SET LOCAL statement_timeout = {timeout_ms}',
                 f'SET LOCAL idle_in_transaction_session_timeout = {timeout_ms}',
             ]
-        if dialect in ('mysql', 'mariadb'):
+        if dialect == 'mysql':
             return [
                 f'SET SESSION max_execution_time = {timeout_ms}',
+                'START TRANSACTION READ ONLY',
+            ]
+        if dialect == 'mariadb':
+            # MariaDB never adopted MySQL's max_execution_time. Its own knob is
+            # max_statement_time, and it is in SECONDS, not milliseconds —
+            # sending the MySQL spelling here raises "unknown system variable"
+            # and takes the whole connection down with it.
+            return [
+                f'SET SESSION max_statement_time = {max(1, int(self.query_timeout))}',
                 'START TRANSACTION READ ONLY',
             ]
         if dialect == 'clickhouse':
