@@ -50,6 +50,11 @@ import re
 # would be read as an INTO clause and a valid query rejected.
 _QUOTE_CHARS = ("'", '"', '`')
 
+# Characters that end a line comment. CR counts as well as LF: a lone CR ends
+# a comment for the server, so treating only LF as the terminator would mask
+# past it and hide anything chained after it on the same physical line.
+_LINE_TERMINATORS = ('\n', '\r')
+
 
 def _mask_quoted_and_comments(sql: str) -> str:
     """Blank the contents of every literal, quoted identifier and comment.
@@ -104,13 +109,16 @@ def _mask_quoted_and_comments(sql: str) -> str:
                     out.append(ch)
                     i += 1
                     break
-                out.append('\n' if c == '\n' else ' ')
+                out.append(c if c in _LINE_TERMINATORS else ' ')
                 i += 1
             continue
 
-        # Line comment: -- or # through end of line.
+        # Line comment: -- or # up to a line terminator, which is NOT consumed.
+        # Both CR and LF end a comment (PostgreSQL scans `--[^\n\r]*`, MySQL
+        # likewise), so masking through a lone CR would hide whatever follows
+        # it on the same physical line — including a chained statement.
         if sql.startswith('--', i) or ch == '#':
-            while i < n and sql[i] != '\n':
+            while i < n and sql[i] not in _LINE_TERMINATORS:
                 out.append(' ')
                 i += 1
             continue
@@ -120,7 +128,7 @@ def _mask_quoted_and_comments(sql: str) -> str:
             end = sql.find('*/', i + 2)
             stop = n if end == -1 else end + 2
             for j in range(i, stop):
-                out.append('\n' if sql[j] == '\n' else ' ')
+                out.append(sql[j] if sql[j] in _LINE_TERMINATORS else ' ')
             i = stop
             continue
 

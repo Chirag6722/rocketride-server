@@ -280,10 +280,44 @@ def test_quote_inside_a_comment_does_not_open_a_literal():
 def test_backslash_is_not_treated_as_an_escape():
     """A backslash must not hide a clause, even though MySQL escapes with it.
 
-    MySQL treats ``\'`` as an escaped quote; PostgreSQL, under the default
-    ``standard_conforming_strings``, does not. Honouring the escape would mask
-    the ``INTO OUTFILE`` that follows and let a PostgreSQL write through.
-    Ignoring it can only end a literal early and expose more text to the
-    checks — a false rejection at worst, never a bypass.
+    MySQL treats a backslash-quote pair as an escaped quote; PostgreSQL, under
+    the default ``standard_conforming_strings``, does not. Honouring the escape
+    would mask the ``INTO OUTFILE`` that follows and let a PostgreSQL write
+    through. Ignoring it can only end a literal early and expose more text to
+    the checks — a false rejection at worst, never a bypass.
     """
-    assert is_sql_safe(r"SELECT 'it' INTO OUTFILE '/tmp/f'") is False
+    backslash = chr(92)
+    sql = "SELECT 'it" + backslash + "' INTO OUTFILE '/tmp/f'"
+
+    # Guard the fixture itself: an earlier version of this test lost its
+    # backslash to escaping and passed without exercising anything.
+    assert backslash in sql
+
+    assert is_sql_safe(sql) is False
+
+
+@pytest.mark.parametrize(
+    'terminator',
+    [chr(10), chr(13), chr(13) + chr(10)],
+)
+def test_line_comment_ends_at_cr_as_well_as_lf(terminator):
+    """A lone CR ends a line comment for the server, so it must end one here.
+
+    Masking through a CR hides whatever follows it on the same physical line.
+    ``SELECT 1 -- x<CR>; DROP TABLE t`` then looks like a bare SELECT while the
+    server sees a chained DROP.
+    """
+    sql = 'SELECT 1 -- x' + terminator + '; DROP TABLE t'
+
+    assert is_sql_safe(sql) is False
+
+
+@pytest.mark.parametrize(
+    'terminator',
+    [chr(10), chr(13), chr(13) + chr(10)],
+)
+def test_comment_still_hides_its_own_content_up_to_any_terminator(terminator):
+    """Ending at CR must not stop comments from doing their job."""
+    sql = '-- DROP TABLE t' + terminator + 'SELECT 1'
+
+    assert is_sql_safe(sql) is True
