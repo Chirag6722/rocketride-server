@@ -368,3 +368,54 @@ result = 'ok'
     assert out['exit_code'] == 0
     assert out['result'] == 'ok'
     assert 'raw write' in out['stdout']
+
+
+def test_non_object_worker_response_is_reported_not_raised(monkeypatch):
+    """Valid JSON of the wrong shape is an error result, not a TypeError.
+
+    The response is parsed and then subscripted; a bare list or string would
+    have raised out of a function whose whole contract is to return a result
+    dict.
+    """
+
+    class _Completed:
+        stdout = '[1, 2, 3]'
+        stderr = ''
+        returncode = 0
+
+    monkeypatch.setattr(sandbox.subprocess, 'run', lambda *a, **k: _Completed())
+
+    out = execute_sandboxed('result = 1')
+
+    assert out['exit_code'] == 1
+    assert out['timed_out'] is False
+    assert 'without a result' in out['stderr']
+
+
+@pytest.mark.parametrize(
+    'code, expected',
+    [
+        ("d = {'a': 1, 'b': 2}\nout = []\nfor k, v in d.items():\n    out.append(k)\nresult = out", ['a', 'b']),
+        ("result = [i for i, ch in enumerate(['x', 'y'])]", [0, 1]),
+        ('result = [a for a, b in zip([1, 2], [3, 4])]', [1, 2]),
+        ('result = [x for (a, b), x in [((1, 2), 3)]]', [3]),
+    ],
+)
+def test_tuple_unpacking_in_for_loops_is_allowed(code, expected):
+    """Iterating pairs is everyday agent code and must not be refused.
+
+    Pins the ``_iter_unpack_sequence_`` binding: these are exactly the shapes
+    that break if the sequence guard is wired where the iterator guard belongs.
+    """
+    out = execute_sandboxed(code)
+
+    assert out['exit_code'] == 0, out['stderr']
+    assert out['result'] == expected
+
+
+def test_result_survives_the_round_trip():
+    """A structured ``result`` reaches the caller through the JSON channel."""
+    out = execute_sandboxed("result = {'a': [1, 2], 'b': 'x'}")
+
+    assert out['exit_code'] == 0
+    assert out['result'] == {'a': [1, 2], 'b': 'x'}

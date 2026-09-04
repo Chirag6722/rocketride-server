@@ -58,12 +58,10 @@ import subprocess
 import sys
 from typing import Any, Dict, Set
 
+from .sandbox_worker import _truncate
+
 _TIMEOUT = 20
 _MAX_OUTPUT = 51200  # 50 KB
-
-# Grace period for the killed child to be reaped after the deadline. Only
-# covers process teardown, not script execution.
-_REAP_GRACE_SECONDS = 5
 
 # The child is this file's sibling, run BY PATH so that starting it does not
 # import the `ai` package __init__ (which resolves dependencies) on every call.
@@ -108,15 +106,6 @@ _DEFAULT_ALLOWED_MODULES = frozenset(
         'unicodedata',
     }
 )
-
-
-def _truncate(text: str, max_size: int = _MAX_OUTPUT) -> str:
-    """Truncate output to *max_size* characters, keeping head and tail."""
-    if len(text) <= max_size:
-        return text
-    marker = f'\n\n... [truncated — {len(text)} chars total, limit {max_size}] ...\n\n'
-    half = (max_size - len(marker)) // 2
-    return text[:half] + marker + text[-half:]
 
 
 def execute_sandboxed(
@@ -176,13 +165,17 @@ def execute_sandboxed(
 
     try:
         response = json.loads(completed.stdout)
+        if not isinstance(response, dict):
+            # Valid JSON of the wrong shape. Subscripting it below would raise
+            # TypeError out of a function whose contract is to return a result.
+            raise ValueError(f'worker response was {type(response).__name__}, expected an object')
     except (TypeError, ValueError):
         # The child died before answering, or answered with something that is
         # not a response. Its stderr is the only evidence of why.
         detail = (completed.stderr or '').strip() or 'no output'
         return {
             'stdout': '',
-            'stderr': f'[Sandbox worker exited {completed.returncode} without a result: {_truncate(detail)}]',
+            'stderr': f'[Sandbox worker exited {completed.returncode} without a result: {_truncate(detail, _MAX_OUTPUT)}]',
             'exit_code': 1,
             'timed_out': False,
         }

@@ -172,11 +172,14 @@ def _guarded_getitem(obj: Any, key: Any) -> Any:
 
 def _pip_install(package: str) -> None:
     """Auto-install a package via pip. Only for allowlisted non-stdlib modules."""
-    subprocess.check_call(
+    # capture_output + run, not check_call with a bare PIPE: check_call never
+    # reads the pipe, so an install chatty enough to fill the buffer would
+    # block forever instead of failing.
+    subprocess.run(
         [sys.executable, '-m', 'pip', 'install', '--quiet', package],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         timeout=60,
+        check=True,
     )
     importlib.invalidate_caches()
 
